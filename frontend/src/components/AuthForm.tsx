@@ -3,7 +3,14 @@
 import { useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useWallet } from "@/context/WalletContext";
-import { Loader2, Mail, Lock, User as UserIcon, Wallet, ShieldCheck } from "lucide-react";
+import {
+  Loader2,
+  Mail,
+  Lock,
+  User as UserIcon,
+  Wallet,
+  ShieldCheck,
+} from "lucide-react";
 import Link from "next/link";
 
 interface AuthFormProps {
@@ -28,7 +35,9 @@ export default function AuthForm({ type }: AuthFormProps) {
     role: "FREELANCER" as "CLIENT" | "FREELANCER",
   });
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+  const handleChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>,
+  ) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
@@ -49,7 +58,8 @@ export default function AuthForm({ type }: AuthFormProps) {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Verification failed");
       login(data.token, data.user);
-    } catch (err: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+    } catch (err: any) {
+      // eslint-disable-line @typescript-eslint/no-explicit-any
       setError(err.message);
     } finally {
       setIsLoading(false);
@@ -98,10 +108,16 @@ export default function AuthForm({ type }: AuthFormProps) {
         });
 
         const data = await response.json();
-        if (!response.ok) throw new Error(data.message || "Registration failed");
-        register(data.token, data.user);
+        if (!response.ok) throw new Error(data.error || "Registration failed");
+
+        // Store email for resend functionality
+        localStorage.setItem("pendingVerificationEmail", formData.email);
+
+        // Redirect to verification page instead of logging in
+        window.location.href = "/auth/verify-email";
       }
-    } catch (err: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+    } catch (err: any) {
+      // eslint-disable-line @typescript-eslint/no-explicit-any
       setError(err.message);
     } finally {
       setIsLoading(false);
@@ -113,9 +129,12 @@ export default function AuthForm({ type }: AuthFormProps) {
       <div className="w-full max-w-md p-8 bg-dark-card border border-dark-border rounded-2xl shadow-xl">
         <div className="text-center mb-8">
           <ShieldCheck size={48} className="mx-auto mb-4 text-stellar-blue" />
-          <h1 className="text-3xl font-bold text-dark-heading mb-2">Two-Factor Authentication</h1>
+          <h1 className="text-3xl font-bold text-dark-heading mb-2">
+            Two-Factor Authentication
+          </h1>
           <p className="text-dark-muted">
-            Enter the 6-digit code from your authenticator app, or use a backup code.
+            Enter the 6-digit code from your authenticator app, or use a backup
+            code.
           </p>
         </div>
 
@@ -153,7 +172,11 @@ export default function AuthForm({ type }: AuthFormProps) {
             disabled={isLoading}
             className="w-full btn-primary py-3 flex items-center justify-center gap-2 font-semibold"
           >
-            {isLoading ? <Loader2 size={20} className="animate-spin" /> : "Verify"}
+            {isLoading ? (
+              <Loader2 size={20} className="animate-spin" />
+            ) : (
+              "Verify"
+            )}
           </button>
 
           <button
@@ -254,7 +277,9 @@ export default function AuthForm({ type }: AuthFormProps) {
                 )}
               </div>
               {!address && type === "register" && (
-                <p className="text-xs text-theme-error mt-1">Wallet is required for registration</p>
+                <p className="text-xs text-theme-error mt-1">
+                  Wallet is required for registration
+                </p>
               )}
             </div>
           </>

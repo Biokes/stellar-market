@@ -10,11 +10,15 @@ let mockTotpCode = "123456";
 jest.mock("otplib", () => ({
   generateSecret: jest.fn(() => MOCK_SECRET),
   generateSync: jest.fn(() => mockTotpCode),
-  verifySync: jest.fn(({ token, secret }: { token: string; secret: string }) => ({
-    valid: token === mockTotpCode,
-    delta: 0,
-  })),
-  generateURI: jest.fn(() => "otpauth://totp/StellarMarket:test@example.com?secret=MOCK"),
+  verifySync: jest.fn(
+    ({ token, secret }: { token: string; secret: string }) => ({
+      valid: token === mockTotpCode,
+      delta: 0,
+    }),
+  ),
+  generateURI: jest.fn(
+    () => "otpauth://totp/StellarMarket:test@example.com?secret=MOCK",
+  ),
 }));
 
 // ─── Prisma mock ─────────────────────────────────────────────────────────────
@@ -64,7 +68,9 @@ function authHeader(userId = "user-test") {
 }
 
 function pendingToken(userId = "user-test") {
-  return jwt.sign({ userId, purpose: "2fa_pending" }, config.jwtSecret, { expiresIn: "5m" });
+  return jwt.sign({ userId, purpose: "2fa_pending" }, config.jwtSecret, {
+    expiresIn: "5m",
+  });
 }
 
 const baseUser = {
@@ -79,6 +85,8 @@ const baseUser = {
   twoFactorSecret: null,
   twoFactorEnabled: false,
   backupCodes: [] as string[],
+  emailVerified: true,
+  isSuspended: false,
   createdAt: new Date(),
   updatedAt: new Date(),
 };
@@ -102,7 +110,10 @@ describe("POST /api/auth/2fa/setup", () => {
   });
 
   it("returns 400 if 2FA is already enabled", async () => {
-    userMock.findUnique.mockResolvedValueOnce({ ...baseUser, twoFactorEnabled: true });
+    userMock.findUnique.mockResolvedValueOnce({
+      ...baseUser,
+      twoFactorEnabled: true,
+    });
 
     const res = await request(app)
       .post("/api/auth/2fa/setup")
@@ -125,7 +136,10 @@ describe("POST /api/auth/2fa/verify", () => {
       ...baseUser,
       twoFactorSecret: `encrypted:${MOCK_SECRET}`,
     });
-    userMock.update.mockResolvedValueOnce({ ...baseUser, twoFactorEnabled: true });
+    userMock.update.mockResolvedValueOnce({
+      ...baseUser,
+      twoFactorEnabled: true,
+    });
 
     const res = await request(app)
       .post("/api/auth/2fa/verify")
@@ -276,7 +290,9 @@ describe("POST /api/auth/2fa/validate", () => {
   });
 
   it("returns 401 with non-2fa token", async () => {
-    const normalToken = jwt.sign({ userId: "user-test" }, config.jwtSecret, { expiresIn: "1h" });
+    const normalToken = jwt.sign({ userId: "user-test" }, config.jwtSecret, {
+      expiresIn: "1h",
+    });
 
     const res = await request(app)
       .post("/api/auth/2fa/validate")
@@ -306,7 +322,11 @@ describe("POST /api/auth/2fa/disable", () => {
     expect(res.body.message).toBe("2FA has been disabled.");
     expect(userMock.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: { twoFactorSecret: null, twoFactorEnabled: false, backupCodes: [] },
+        data: {
+          twoFactorSecret: null,
+          twoFactorEnabled: false,
+          backupCodes: [],
+        },
       }),
     );
   });

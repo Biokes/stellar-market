@@ -27,6 +27,14 @@ router.post("/init-create", authenticate, asyncHandler(async (req: AuthRequest, 
     return res.status(403).json({ error: "Only the client can initialize the escrow." });
   }
 
+  if (!job.deadline) {
+    return res.status(400).json({ error: "Job must have a deadline before initializing escrow." });
+  }
+
+  if (!job.milestones || job.milestones.length === 0) {
+    return res.status(400).json({ error: "Job must have at least one milestone before initializing escrow." });
+  }
+
   const xdr = await ContractService.buildCreateJobTx(
     job.client.walletAddress,
     job.freelancer.walletAddress,
@@ -36,7 +44,7 @@ router.post("/init-create", authenticate, asyncHandler(async (req: AuthRequest, 
       amount: m.amount,
       deadline: Math.floor((m.contractDeadline?.getTime() || (Date.now() + 86400000 * 7)) / 1000)
     })),
-    Math.floor((job as any).deadline.getTime() / 1000)
+    Math.floor(job.deadline.getTime() / 1000)
   );
 
   res.json({ xdr });
@@ -84,6 +92,37 @@ router.post("/init-approve", authenticate, asyncHandler(async (req: AuthRequest,
 }));
 
 /**
+ * Request XDR to extend a milestone deadline on-chain.
+ */
+router.post("/init-extend-deadline", authenticate, asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { milestoneId, newDeadline } = req.body;
+
+  const milestone = await prisma.milestone.findUnique({
+    where: { id: milestoneId },
+    include: { job: { include: { client: true } } },
+  });
+
+  if (!milestone || !milestone.job.contractJobId || milestone.onChainIndex === null) {
+    return res.status(404).json({ error: "On-chain milestone not found." });
+  }
+
+  if (milestone.job.clientId !== req.userId) {
+    return res.status(403).json({ error: "Only the client can extend deadlines." });
+  }
+
+  const newDeadlineUnix = Math.floor(new Date(newDeadline).getTime() / 1000);
+
+  const xdr = await ContractService.buildExtendDeadlineTx(
+    milestone.job.client.walletAddress,
+    milestone.job.contractJobId,
+    milestone.onChainIndex,
+    newDeadlineUnix,
+  );
+
+  res.json({ xdr });
+}));
+
+/**
  * Confirm transaction and update local database.
  * In a real app, this should ideally be handled by an event listener/indexer,
  * but for this integration task, we verify the hash provided by the frontend.
@@ -122,38 +161,49 @@ router.post("/confirm-tx", authenticate, asyncHandler(async (req: AuthRequest, r
       where: { id: jobId },
       data: { escrowStatus: EscrowStatus.FUNDED }
     });
-  } else if (type === "APPROVE_MILESTONE" && milestoneId) {
+  } else if (type === "EXTEND_DEADLINE" && milestoneId) {
+    const { newDeadline } = req.body;
     await prisma.milestone.update({
       where: { id: milestoneId },
-      data: { status: "APPROVED" }
+      data: { contractDeadline: new Date(newDeadline) },
     });
+  } else if (type === "APPROVE_MILESTONE" && milestoneId) {
+    await prisma.$transaction(async (tx) => {
+      // Step 1: Update milestone status
+      const updatedMilestone = await tx.milestone.update({
+        where: { id: milestoneId },
+        data: { status: "APPROVED" },
+        include: { job: true }
+      });
 
-    // Check if all milestones are approved to update job status
-    const milestone = await prisma.milestone.findUnique({
-      where: { id: milestoneId },
-      include: { job: true },
+      if (!updatedMilestone.jobId) return;
+
+      // Step 2: Check if all milestones are approved to update job status
+      const allMilestones = await tx.milestone.findMany({ 
+        where: { jobId: updatedMilestone.jobId } 
+      });
+
+      if (allMilestones.every(m => m.status === "APPROVED")) {
+        await tx.job.update({
+          where: { id: updatedMilestone.jobId },
+          data: {
+            status: "COMPLETED",
+            escrowStatus: EscrowStatus.COMPLETED
+          }
+        });
+      }
+
+      // Step 3: Notify the freelancer (inside transaction for consistency)
+      if (updatedMilestone.job.freelancerId) {
+        await NotificationService.sendNotification({
+          userId: updatedMilestone.job.freelancerId,
+          type: NotificationType.MILESTONE_APPROVED,
+          title: "Milestone Approved",
+          message: `Your milestone "${updatedMilestone.title}" has been approved and funds released!`,
+          metadata: { jobId: updatedMilestone.jobId, milestoneId: updatedMilestone.id },
+        });
+      }
     });
-    const allMilestones = await prisma.milestone.findMany({ where: { jobId: milestone?.jobId } });
-    if (allMilestones.every(m => m.status === "APPROVED")) {
-      await prisma.job.update({
-        where: { id: milestone?.jobId },
-        data: {
-          status: "COMPLETED",
-          escrowStatus: EscrowStatus.COMPLETED
-        }
-      });
-    }
-
-    // Notify the freelancer
-    if (milestone && milestone.job.freelancerId) {
-      await NotificationService.sendNotification({
-        userId: milestone.job.freelancerId,
-        type: NotificationType.MILESTONE_APPROVED,
-        title: "Milestone Approved",
-        message: `Your milestone "${milestone.title}" has been approved and funds released!`,
-        metadata: { jobId: milestone.jobId, milestoneId: milestone.id },
-      });
-    }
   }
 
   res.json({ message: "Transaction confirmed and database updated." });

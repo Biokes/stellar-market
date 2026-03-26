@@ -9,6 +9,7 @@ export const registerSchema = z.object({
     .string()
     .min(2, "Name must be at least 2 characters long")
     .max(100, "Name must be less than 100 characters"),
+  role: z.enum(["CLIENT", "FREELANCER"]).default("FREELANCER"),
 });
 
 export const loginSchema = z.object({
@@ -36,4 +37,17 @@ export const changePasswordSchema = z.object({
 
 export const verifyEmailParamSchema = z.object({
   token: z.string().min(1, "Verification token is required"),
+});
+
+export const twoFactorVerifySchema = z.object({
+  code: z.string().length(6, "Code must be exactly 6 digits").regex(/^\d{6}$/, "Code must be 6 digits"),
+});
+
+export const twoFactorDisableSchema = z.object({
+  password: z.string().min(1, "Password is required"),
+});
+
+export const twoFactorValidateSchema = z.object({
+  code: z.string().min(1, "Code is required"),
+  tempToken: z.string().min(1, "Temporary token is required"),
 });

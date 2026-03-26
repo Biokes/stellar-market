@@ -10,6 +10,7 @@ import {
   getJobByIdParamSchema,
   updateJobStatusSchema
 } from "../schemas";
+import { cache, invalidateCache, invalidateCacheKey, generateJobsCacheKey, generateJobCacheKey } from "../lib/cache";
 
 const router = Router();
 /**
@@ -77,64 +78,127 @@ router.get("/",
   validate({ query: getJobsQuerySchema }),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { page, limit, search, skill, skills, status, minBudget, maxBudget, clientId, sort, postedAfter } = req.query as any;
-    const skip = (page - 1) * limit;
+    
+    // Generate cache key based on query parameters
+    const cacheKey = generateJobsCacheKey({
+      page,
+      limit,
+      search,
+      skill,
+      skills,
+      status,
+      minBudget,
+      maxBudget,
+      clientId,
+      sort,
+      postedAfter
+    });
 
-    const where: any = {};
+    // Cache for 60 seconds
+    const { data, hit } = await cache(cacheKey, 60, async () => {
+      const skip = (page - 1) * limit;
 
-    if (search) {
-      where.OR = [
-        { title: { contains: search, mode: "insensitive" } },
-        { description: { contains: search, mode: "insensitive" } },
-      ];
-    }
+      const where: any = {};
 
-    if (skills) {
-      const skillList = (skills as string).split(",").map((s: string) => s.trim());
-      where.skills = { hasSome: skillList };
-    } else if (skill) {
-      where.skills = { has: skill };
-    }
-
-    if (status) {
-      const statusList = (status as string).split(",").map((s: string) => s.trim());
-      if (statusList.length === 1) {
-        where.status = statusList[0];
-      } else {
-        where.status = { in: statusList };
+      if (search) {
+        where.OR = [
+          { title: { contains: search, mode: "insensitive" } },
+          { description: { contains: search, mode: "insensitive" } },
+        ];
       }
-    }
 
-    if (minBudget || maxBudget) {
-      where.budget = {};
-      if (minBudget) where.budget.gte = minBudget;
-      if (maxBudget) where.budget.lte = maxBudget;
-    }
+      if (skills) {
+        const skillList = (skills as string).split(",").map((s: string) => s.trim());
+        where.skills = { hasSome: skillList };
+      } else if (skill) {
+        where.skills = { has: skill };
+      }
 
-    if (clientId) {
-      where.clientId = clientId;
-    }
+      if (status) {
+        const statusList = (status as string).split(",").map((s: string) => s.trim());
+        if (statusList.length === 1) {
+          where.status = statusList[0];
+        } else {
+          where.status = { in: statusList };
+        }
+      }
 
-    if (postedAfter) {
-      where.createdAt = { gte: new Date(postedAfter) };
-    }
+      if (minBudget || maxBudget) {
+        where.budget = {};
+        if (minBudget) where.budget.gte = minBudget;
+        if (maxBudget) where.budget.lte = maxBudget;
+      }
 
-    let orderBy: any = { createdAt: "desc" };
-    if (sort === "oldest") orderBy = { createdAt: "asc" };
-    else if (sort === "budget_high") orderBy = { budget: "desc" };
-    else if (sort === "budget_low") orderBy = { budget: "asc" };
+      if (clientId) {
+        where.clientId = clientId;
+      }
+
+      if (postedAfter) {
+        where.createdAt = { gte: new Date(postedAfter) };
+      }
+
+      let orderBy: any = { createdAt: "desc" };
+      if (sort === "oldest") orderBy = { createdAt: "asc" };
+      else if (sort === "budget_high") orderBy = { budget: "desc" };
+      else if (sort === "budget_low") orderBy = { budget: "asc" };
+
+      const [jobs, total] = await Promise.all([
+        prisma.job.findMany({
+          where,
+          include: {
+            client: { select: { id: true, username: true, avatarUrl: true } },
+            freelancer: { select: { id: true, username: true, avatarUrl: true } },
+            milestones: true,
+            _count: { select: { applications: true } },
+          },
+          orderBy,
+          skip,
+          take: limit,
+        }),
+        prisma.job.count({ where }),
+      ]);
+
+      return {
+        data: jobs,
+        total,
+        page,
+        totalPages: Math.ceil(total / limit),
+      };
+    });
+
+    // Add cache hit status to response headers for debugging
+    res.set('X-Cache-Hit', hit.toString());
+    res.json(data);
+  })
+);
+
+// Get jobs for the authenticated user (client or freelancer)
+router.get("/mine",
+  authenticate,
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { page = 1, limit = 10, status } = req.query as any;
+    const skip = (Number(page) - 1) * Number(limit);
+
+    const where: any = {
+      OR: [
+        { clientId: req.userId },
+        { freelancerId: req.userId },
+      ],
+    };
+    if (status) where.status = status;
 
     const [jobs, total] = await Promise.all([
       prisma.job.findMany({
         where,
+        skip,
+        take: Number(limit),
+        orderBy: { createdAt: "desc" },
         include: {
           client: { select: { id: true, username: true, avatarUrl: true } },
           freelancer: { select: { id: true, username: true, avatarUrl: true } },
           milestones: true,
           _count: { select: { applications: true } },
         },
-        orderBy,
-        skip,
-        take: limit,
       }),
       prisma.job.count({ where }),
     ]);
@@ -142,8 +206,8 @@ router.get("/",
     res.json({
       data: jobs,
       total,
-      page,
-      totalPages: Math.ceil(total / limit),
+      page: Number(page),
+      totalPages: Math.ceil(total / Number(limit))
     });
   })
 );
@@ -288,7 +352,7 @@ router.post("/",
    *         content:
    *           application/json:
    *             schema:
-   *               $ref: '#/components/schemas/ErrorResponse'
+   *               $ref: '#/components/schemas/ErrorResponsenponse'
    */
   authenticate,
   validate({ body: createJobSchema }),
@@ -317,6 +381,9 @@ router.post("/",
       include: { milestones: true },
     });
 
+    // Invalidate job listings cache when a new job is created
+    await invalidateCache("jobs:list:*");
+    
     res.status(201).json(job);
   })
 );
@@ -350,6 +417,10 @@ router.put("/:id",
       include: { milestones: true },
     });
 
+    // Invalidate job listings cache and single job cache
+    await invalidateCache("jobs:list:*");
+    await invalidateCacheKey(generateJobCacheKey(id));
+
     res.json(updated);
   })
 );
@@ -370,6 +441,11 @@ router.delete("/:id",
     }
 
     await prisma.job.delete({ where: { id } });
+    
+    // Invalidate job listings cache and single job cache
+    await invalidateCache("jobs:list:*");
+    await invalidateCacheKey(generateJobCacheKey(id));
+    
     res.json({ message: "Job deleted successfully." });
   })
 );
@@ -399,6 +475,10 @@ router.patch("/:id/status",
       data: { status },
       include: { milestones: true },
     });
+
+    // Invalidate job listings cache and single job cache
+    await invalidateCache("jobs:list:*");
+    await invalidateCacheKey(generateJobCacheKey(id));
 
     res.json(updated);
   })

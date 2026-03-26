@@ -555,7 +555,7 @@ impl ReputationContract {
                 .get(&bonuses_key)
                 .unwrap_or(Vec::new(env));
             
-            bonuses.push_back(ReferralBonusRecord {
+            bonuses = bonuses.push_back(ReferralBonusRecord {
                 amount: earned_score,
                 weight: min_stake,
                 timestamp: env.ledger().timestamp(),

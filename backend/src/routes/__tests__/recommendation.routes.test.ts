@@ -82,7 +82,8 @@ describe("GET /api/jobs/recommended", () => {
     // No completed jobs
     prismaMock.job.findMany
       .mockResolvedValueOnce([]) // completed jobs query
-      .mockResolvedValueOnce([   // open jobs query
+      .mockResolvedValueOnce([
+        // open jobs query
         {
           id: "job-1",
           title: "React Developer Needed",
@@ -154,7 +155,7 @@ describe("GET /api/jobs/recommended", () => {
     // Job with React+TypeScript overlap should be ranked first
     expect(res.body.data[0].id).toBe("job-1");
     expect(res.body.data[0].relevanceScore).toBeGreaterThan(
-      res.body.data[1].relevanceScore
+      res.body.data[1].relevanceScore,
     );
   });
 
@@ -165,7 +166,7 @@ describe("GET /api/jobs/recommended", () => {
     });
 
     prismaMock.job.findMany
-      .mockResolvedValueOnce([])  // completed jobs
+      .mockResolvedValueOnce([]) // completed jobs
       .mockResolvedValueOnce([]); // open jobs
 
     prismaMock.application.findMany.mockResolvedValueOnce([]);
@@ -185,9 +186,7 @@ describe("GET /api/jobs/recommended", () => {
       role: "FREELANCER",
     });
 
-    prismaMock.job.findMany
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([]);
+    prismaMock.job.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
 
     prismaMock.application.findMany.mockResolvedValueOnce([]);
 

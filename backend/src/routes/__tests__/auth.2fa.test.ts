@@ -110,7 +110,7 @@ describe("POST /api/auth/2fa/setup", () => {
   });
 
   it("returns 400 if 2FA is already enabled", async () => {
-    userMock.findUnique.mockResolvedValueOnce({
+    userMock.findUnique.mockResolvedValue({
       ...baseUser,
       twoFactorEnabled: true,
     });

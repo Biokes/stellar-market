@@ -315,12 +315,11 @@ export default function JobDetailPage() {
   );
   const isOwnJob = user?.id === job.client.id || isClient;
   const isOwner = user?.id === job.client.id;
-  const isFreelancer = user?.role === "FREELANCER";
   const isPartyOnJob = Boolean(
     user &&
       address &&
       ((user.id === job.client.id && address === job.client.walletAddress) ||
-        isFreelancerOnJob)),
+        isFreelancerOnJob)
   );
   const pendingRevision = job.revisionProposal ?? null;
   const canRespondToRevision = Boolean(

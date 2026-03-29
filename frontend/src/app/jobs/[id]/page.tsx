@@ -149,7 +149,7 @@ export default function JobDetailPage() {
     }
   };
 
-  const handleEscrowAction = async (action: "init" | "fund" | "approve" | "extend-deadline", milestoneId?: string) => {
+  const handleEscrowAction = async (action: "init" | "fund" | "approve" | "submit" | "extend-deadline", milestoneId?: string) => {
     setError(null);
     setProcessing(true);
     try {
@@ -168,6 +168,10 @@ export default function JobDetailPage() {
         endpoint = "/escrow/init-approve";
         payload = { milestoneId };
         type = "APPROVE_MILESTONE";
+      } else if (action === "submit") {
+        endpoint = "/escrow/init-submit";
+        payload = { milestoneId };
+        type = "SUBMIT_MILESTONE";
       } else if (action === "extend-deadline") {
         endpoint = "/escrow/init-extend-deadline";
         const newDeadline = extendDeadlineDate[milestoneId!];
@@ -188,16 +192,12 @@ export default function JobDetailPage() {
       }
 
       // 3. Confirm with backend
-      // Note: For CREATE_JOB, we ideally need the on-chain job ID from events, 
-      // but here we simplify or assume the backend can extract it or use a count.
-      // In this contract, job IDs are sequential. Our backend confirm-tx needs to know this.
       await axios.post(`${API_URL}/escrow/confirm-tx`, {
         hash: txResult.hash,
         type,
         jobId: id,
         milestoneId,
         newDeadline: action === "extend-deadline" ? extendDeadlineDate[milestoneId!] : undefined,
-        onChainJobId: 1, // Simplified for this task: in production, parse resultXdr or events
       }, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -205,7 +205,25 @@ export default function JobDetailPage() {
       // 4. Refresh data
       await fetchJob();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to fetch job details.");
+      setError(err instanceof Error ? err.message : "Action failed.");
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const handleUpdateMilestoneStatus = async (milestoneId: string, status: string) => {
+    setError(null);
+    setProcessing(true);
+    try {
+      const token = localStorage.getItem("token");
+      await axios.put(
+        `${API_URL}/milestones/${milestoneId}/status`,
+        { status },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      await fetchJob();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to update milestone status.");
     } finally {
       setProcessing(false);
     }
@@ -290,6 +308,11 @@ export default function JobDetailPage() {
   }
 
   const isClient = address === job.client.walletAddress;
+  const isFreelancerOnJob = Boolean(
+    job.freelancer &&
+    user?.id === job.freelancer.id &&
+    address === job.freelancer.walletAddress
+  );
   const isOwnJob = user?.id === job.client.id || isClient;
   const isOwner = user?.id === job.client.id;
   const isFreelancer = user?.role === "FREELANCER";
@@ -297,9 +320,7 @@ export default function JobDetailPage() {
     user &&
       address &&
       ((user.id === job.client.id && address === job.client.walletAddress) ||
-        (job.freelancer &&
-          user.id === job.freelancer.id &&
-          address === job.freelancer.walletAddress)),
+        isFreelancerOnJob)),
   );
   const pendingRevision = job.revisionProposal ?? null;
   const canRespondToRevision = Boolean(
@@ -469,6 +490,28 @@ export default function JobDetailPage() {
                             {processing ? <Loader2 className="animate-spin" size={14} /> : <ShieldCheck size={14} />}
                             Approve & Release Funds
                         </button>
+                    )}
+
+                    {isFreelancerOnJob && milestone.status === "PENDING" && (
+                      <button
+                        disabled={processing}
+                        onClick={() => handleUpdateMilestoneStatus(milestone.id, "IN_PROGRESS")}
+                        className="btn-primary py-1.5 text-xs flex items-center gap-2"
+                      >
+                        {processing ? <Loader2 className="animate-spin" size={14} /> : <Clock size={14} />}
+                        Start Milestone
+                      </button>
+                    )}
+
+                    {isFreelancerOnJob && milestone.status === "IN_PROGRESS" && (
+                      <button
+                        disabled={processing}
+                        onClick={() => handleEscrowAction("submit", milestone.id)}
+                        className="btn-primary py-1.5 text-xs flex items-center gap-2"
+                      >
+                        {processing ? <Loader2 className="animate-spin" size={14} /> : <CheckCircle size={14} />}
+                        Submit for Review
+                      </button>
                     )}
 
                     {/* Extend Deadline — client only, on overdue milestones */}

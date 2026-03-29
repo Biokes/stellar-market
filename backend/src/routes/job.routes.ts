@@ -8,7 +8,8 @@ import {
   updateJobSchema,
   getJobsQuerySchema,
   getJobByIdParamSchema,
-  updateJobStatusSchema
+  updateJobStatusSchema,
+  getSavedJobsQuerySchema
 } from "../schemas";
 import { cache, invalidateCache, invalidateCacheKey, generateJobsCacheKey, generateJobCacheKey, generateJobOnChainStatusCacheKey } from "../lib/cache";
 import { ContractService, RevisionProposalView } from "../services/contract.service";
@@ -213,6 +214,84 @@ router.get("/mine",
   })
 );
 
+// Get saved jobs for authenticated freelancer
+router.get("/saved",
+  authenticate,
+  validate({ query: getSavedJobsQuerySchema }),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const user = await prisma.user.findUnique({
+      where: { id: req.userId },
+      select: { role: true },
+    });
+
+    if (!user || user.role !== "FREELANCER") {
+      return res.status(403).json({ error: "Only freelancers can view saved jobs." });
+    }
+
+    const { page = 1, limit = 10, search, skill, minBudget, maxBudget } = req.query as any;
+    const skip = (Number(page) - 1) * Number(limit);
+
+    const where: any = {
+      status: "OPEN",
+    };
+
+    if (search) {
+      where.OR = [
+        { title: { contains: search, mode: "insensitive" } },
+        { description: { contains: search, mode: "insensitive" } },
+      ];
+    }
+
+    if (skill) {
+      where.skills = { has: skill };
+    }
+
+    if (minBudget || maxBudget) {
+      where.budget = {};
+      if (minBudget) where.budget.gte = Number(minBudget);
+      if (maxBudget) where.budget.lte = Number(maxBudget);
+    }
+
+    const [savedJobs, total] = await Promise.all([
+      prisma.savedJob.findMany({
+        where: { freelancerId: req.userId },
+        include: {
+          job: {
+            where,
+            include: {
+              client: { select: { id: true, username: true, avatarUrl: true } },
+              milestones: true,
+              _count: { select: { applications: true } },
+            },
+          },
+        },
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: Number(limit),
+      }),
+      prisma.savedJob.count({
+        where: {
+          freelancerId: req.userId,
+          job: where,
+        },
+      }),
+    ]);
+
+    const jobs = savedJobs.map(savedJob => ({
+      ...savedJob.job,
+      savedAt: savedJob.createdAt,
+      isSaved: true,
+    }));
+
+    res.json({
+      data: jobs,
+      total,
+      page: Number(page),
+      totalPages: Math.ceil(total / Number(limit)),
+    });
+  })
+);
+
 // Get a single job by ID
 router.get("/:id",
   validate({ params: getJobByIdParamSchema }),
@@ -234,6 +313,27 @@ router.get("/:id",
 
     if (!job) {
       return res.status(404).json({ error: "Job not found." });
+    }
+
+    // Check if job is saved by authenticated user (if freelancer)
+    let isSaved = false;
+    if (req.userId) {
+      const user = await prisma.user.findUnique({
+        where: { id: req.userId },
+        select: { role: true },
+      });
+
+      if (user && user.role === "FREELANCER") {
+        const savedJob = await prisma.savedJob.findUnique({
+          where: {
+            freelancerId_jobId: {
+              freelancerId: req.userId,
+              jobId: id,
+            },
+          },
+        });
+        isSaved = !!savedJob;
+      }
     }
 
     // Fetch on-chain escrow status if contractJobId is present
@@ -264,6 +364,7 @@ router.get("/:id",
       escrow_status: escrowStatus, // Alias for frontend compatibility
       escrowStatus: escrowStatus,    // Keep original for consistency
       revisionProposal,
+      isSaved,
     });
   })
 );
@@ -510,6 +611,97 @@ router.patch("/:id/status",
     await invalidateCacheKey(generateJobCacheKey(id));
 
     res.json(updated);
+  })
+);
+
+// Save/bookmark a job
+router.post("/:id/save",
+  authenticate,
+  validate({ params: getJobByIdParamSchema }),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const user = await prisma.user.findUnique({
+      where: { id: req.userId },
+      select: { role: true },
+    });
+
+    if (!user || user.role !== "FREELANCER") {
+      return res.status(403).json({ error: "Only freelancers can save jobs." });
+    }
+
+    const id = req.params.id as string;
+    const job = await prisma.job.findUnique({ where: { id } });
+
+    if (!job) {
+      return res.status(404).json({ error: "Job not found." });
+    }
+
+    // Check if already saved
+    const existingSave = await prisma.savedJob.findUnique({
+      where: {
+        freelancerId_jobId: {
+          freelancerId: req.userId!,
+          jobId: id,
+        },
+      },
+    });
+
+    if (existingSave) {
+      return res.status(409).json({ error: "Job already saved." });
+    }
+
+    const savedJob = await prisma.savedJob.create({
+      data: {
+        freelancerId: req.userId!,
+        jobId: id,
+      },
+    });
+
+    res.status(201).json({
+      message: "Job saved successfully.",
+      savedJob,
+    });
+  })
+);
+
+// Remove saved/bookmarked job
+router.delete("/:id/save",
+  authenticate,
+  validate({ params: getJobByIdParamSchema }),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const user = await prisma.user.findUnique({
+      where: { id: req.userId },
+      select: { role: true },
+    });
+
+    if (!user || user.role !== "FREELANCER") {
+      return res.status(403).json({ error: "Only freelancers can unsave jobs." });
+    }
+
+    const id = req.params.id as string;
+
+    const savedJob = await prisma.savedJob.findUnique({
+      where: {
+        freelancerId_jobId: {
+          freelancerId: req.userId!,
+          jobId: id,
+        },
+      },
+    });
+
+    if (!savedJob) {
+      return res.status(404).json({ error: "Job was not saved." });
+    }
+
+    await prisma.savedJob.delete({
+      where: {
+        freelancerId_jobId: {
+          freelancerId: req.userId!,
+          jobId: id,
+        },
+      },
+    });
+
+    res.json({ message: "Job unsaved successfully." });
   })
 );
 

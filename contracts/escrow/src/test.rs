@@ -656,6 +656,69 @@ fn test_propose_revision_fails_for_disputed_job() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #3)")]
+fn test_approve_milestone_fails_for_disputed_job() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, client, freelancer, token, _) = setup_test(&env);
+
+    let milestones = vec![&env, (String::from_str(&env, "Initial"), 1000_i128, JOB_DEADLINE)];
+    let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD);
+
+    // Mocking job status to Disputed
+    env.as_contract(&contract.address, || {
+        let key = crate::DataKey::Job(job_id);
+        let mut job: crate::Job = env.storage().persistent().get(&key).unwrap();
+        job.status = JobStatus::Disputed;
+        env.storage().persistent().set(&key, &job);
+    });
+
+    contract.approve_milestone(&job_id, &0, &client);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")]
+fn test_submit_milestone_fails_for_disputed_job() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, client, freelancer, token, _) = setup_test(&env);
+
+    let milestones = vec![&env, (String::from_str(&env, "Initial"), 1000_i128, JOB_DEADLINE)];
+    let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD);
+
+    // Mocking job status to Disputed
+    env.as_contract(&contract.address, || {
+        let key = crate::DataKey::Job(job_id);
+        let mut job: crate::Job = env.storage().persistent().get(&key).unwrap();
+        job.status = JobStatus::Disputed;
+        env.storage().persistent().set(&key, &job);
+    });
+
+    contract.submit_milestone(&job_id, &0, &freelancer);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")]
+fn test_approve_milestones_batch_fails_for_disputed_job() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, client, freelancer, token, _) = setup_test(&env);
+
+    let milestones = vec![&env, (String::from_str(&env, "Initial"), 1000_i128, JOB_DEADLINE)];
+    let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD);
+
+    // Mocking job status to Disputed
+    env.as_contract(&contract.address, || {
+        let key = crate::DataKey::Job(job_id);
+        let mut job: crate::Job = env.storage().persistent().get(&key).unwrap();
+        job.status = JobStatus::Disputed;
+        env.storage().persistent().set(&key, &job);
+    });
+
+    contract.approve_milestones_batch(&job_id, &vec![&env, 0], &client);
+}
+
+#[test]
 #[should_panic(expected = "Error(Contract, #19)")]
 fn test_propose_revision_fails_for_non_party() {
     let env = Env::default();

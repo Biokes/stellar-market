@@ -520,6 +520,9 @@ impl EscrowContract {
         if job.status != JobStatus::Funded && job.status != JobStatus::InProgress {
             return Err(EscrowError::InvalidStatus);
         }
+        if job.status == JobStatus::Disputed {
+            return Err(EscrowError::InvalidStatus);
+        }
 
         let mut milestones = job.milestones.clone();
         let milestone = milestones
@@ -572,6 +575,10 @@ impl EscrowContract {
 
         if job.client != client {
             return Err(EscrowError::Unauthorized);
+        }
+
+        if job.status == JobStatus::Disputed {
+            return Err(EscrowError::InvalidStatus);
         }
 
         let mut milestones = job.milestones.clone();
@@ -663,6 +670,10 @@ impl EscrowContract {
 
         if job.client != client {
             return Err(EscrowError::Unauthorized);
+        }
+
+        if job.status == JobStatus::Disputed {
+            return Err(EscrowError::InvalidStatus);
         }
 
         // Validate all milestone indices before making any state changes

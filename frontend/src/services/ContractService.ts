@@ -23,6 +23,8 @@ const RPC_URL =
 const REPUTATION_CONTRACT_ID =
   process.env.NEXT_PUBLIC_REPUTATION_CONTRACT_ID || "";
 
+const ESCROW_CONTRACT_ID = process.env.NEXT_PUBLIC_ESCROW_CONTRACT_ID || "";
+
 function getBadgeTier(averageRaw: number): ReputationTier {
   if (averageRaw >= 700) return "Platinum";
   if (averageRaw >= 500) return "Gold";
@@ -91,5 +93,55 @@ export class ContractService {
 
     const native = scValToNative(retval);
     return parse(native);
+  }
+
+  static async buildSubmitReviewTx(params: {
+    reviewerPublicKey: string;
+    revieweePublicKey: string;
+    jobIdOnChain: string | number | bigint;
+    rating: number;
+    comment: string;
+    stakeWeightStroops: string | number | bigint;
+  }): Promise<string> {
+    if (!REPUTATION_CONTRACT_ID) {
+      throw new Error("Missing NEXT_PUBLIC_REPUTATION_CONTRACT_ID");
+    }
+    if (!ESCROW_CONTRACT_ID) {
+      throw new Error("Missing NEXT_PUBLIC_ESCROW_CONTRACT_ID");
+    }
+
+    const server = new rpc.Server(RPC_URL);
+    const contract = new Contract(REPUTATION_CONTRACT_ID);
+    const account = await server.getAccount(params.reviewerPublicKey);
+
+    const stakeWeight = BigInt(params.stakeWeightStroops);
+    const jobId = BigInt(params.jobIdOnChain);
+
+    const tx = new TransactionBuilder(account, {
+      fee: "100",
+      networkPassphrase: Networks.TESTNET,
+    })
+      .addOperation(
+        contract.call(
+          "submit_review",
+          nativeToScVal(Address.fromString(ESCROW_CONTRACT_ID), {
+            type: "address",
+          }),
+          nativeToScVal(Address.fromString(params.reviewerPublicKey), {
+            type: "address",
+          }),
+          nativeToScVal(Address.fromString(params.revieweePublicKey), {
+            type: "address",
+          }),
+          nativeToScVal(jobId, { type: "u64" }),
+          nativeToScVal(params.rating, { type: "u32" }),
+          nativeToScVal(params.comment),
+          nativeToScVal(stakeWeight, { type: "i128" }),
+        ),
+      )
+      .setTimeout(30)
+      .build();
+
+    return tx.toXDR();
   }
 }

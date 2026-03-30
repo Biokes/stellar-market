@@ -50,6 +50,7 @@ router.get("/me", authenticate, async (req: AuthRequest, res: Response) => {
         username: true,
         walletAddress: true,
         email: true,
+        emailVerified: true,
         bio: true,
         avatarUrl: true,
         role: true,

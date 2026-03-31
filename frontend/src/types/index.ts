@@ -3,6 +3,7 @@ export interface User {
   walletAddress: string;
   username: string;
   email?: string;
+  emailVerified?: boolean;
   bio?: string;
   avatarUrl?: string;
   role: "CLIENT" | "FREELANCER";

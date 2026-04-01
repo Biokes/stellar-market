@@ -39,11 +39,33 @@ export const authenticate = async (
 
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },
-      select: { role: true },
+      select: { role: true, emailVerified: true },
     });
 
     if (!user) {
       res.status(401).json({ error: "User not found." });
+      return;
+    }
+
+    // Check if email verification is required for this route
+    const exemptRoutes = [
+      "/auth/send-verification",
+      "/auth/verify-email",
+      "/auth/login",
+      "/auth/2fa/validate",
+      "/auth/forgot-password",
+      "/auth/reset-password",
+    ];
+
+    const isExempt = exemptRoutes.some((route) => req.path.includes(route));
+
+    if (!isExempt && !user.emailVerified) {
+      res.status(403).json({
+        error: "Email not verified.",
+        message:
+          "Please check your inbox and click the verification link before continuing.",
+        code: "EMAIL_NOT_VERIFIED",
+      });
       return;
     }
 

@@ -222,11 +222,6 @@ export default function DashboardPage() {
   }, [token, user?.id, isClient]);
 
   useEffect(() => {
-    fetchStats();
-    fetchWeeklyData();
-  }, [fetchStats, fetchWeeklyData]);
-
-  useEffect(() => {
     fetchDashboardData();
   }, [fetchDashboardData]);
 
@@ -237,7 +232,7 @@ export default function DashboardPage() {
         headers: { Authorization: `Bearer ${token}` },
       });
       setApplications((prev) => prev.filter((a) => a.id !== appId));
-      fetchStats();
+      fetchDashboardData();
     } catch {
       // Keep list unchanged on error
     } finally {

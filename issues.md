@@ -1,76 +1,52 @@
-#224 Fix: GET /api/notifications has no pagination — response payload grows unbounded as notifications accumulate
+#293 Fix: services page filter state is lost on browser back navigation — URL query params do not reflect selected filters
 Repo Avatar
 stellarmarket-labs/stellar-market
 Problem
-`GET /api/notifications` returns all notifications for the authenticated user in a single query with no `LIMIT`. Active users accumulate hundreds of notifications over time; this single query will degrade in performance and eventually cause memory/timeout issues.
+When a user selects filters on /services (category, price range, rating) and navigates to a service detail page, pressing browser Back resets all filters to their defaults. Filter state is held in React component state only, not URL params.
 
-Additionally the route returns the entire dataset to the client, making the response slow to render on the frontend notification page.
-
-Proposed Fix
-Add cursor- or offset-based pagination consistent with the job and transaction routes:
-
-Accept `page` (default 1) and `limit` (default 20, max 100) query params.
-Return a `meta` object: `{ total, page, limit, totalPages }`.
-Add a database index on `(user_id, created_at DESC)` if not already present.
-GET /api/notifications?page=1&limit=20
-Acceptance Criteria
- Route accepts `page` and `limit` query params.
- Response includes `data` array and `meta` pagination object.
- `page` and `limit` are cast to integers (mirrors fix in #145).
- Without params, defaults to page 1, limit 20.
- Unit test asserts pagination metadata is correct.
-
-
- #223 Fix: POST /api/disputes does not verify the requester is a participant of the job — any authenticated user can open a dispute
-Repo Avatar
-stellarmarket-labs/stellar-market
-Problem
-The dispute creation endpoint (`POST /api/disputes`) only checks that the user is authenticated. It does not verify that the requesting user is either the client or the hired freelancer for the referenced job. Any logged-in user can open a dispute against any job.
-
-This can be abused to:
-
-Lock jobs in a `DISPUTED` state maliciously.
-Trigger on-chain dispute flows for jobs the caller is unrelated to.
-Steps to Reproduce
-Log in as User A.
-Find a job that belongs to User B and User C.
-`POST /api/disputes` with that `jobId`.
-Dispute is created successfully — 403 should have been returned.
 Fix
-In the dispute creation handler, after fetching the job:
+Sync filter values with URL search params using useSearchParams (Next.js App Router) or nuqs:
 
-if (job.clientId !== req.user.id && job.freelancerId !== req.user.id) {
-  return res.status(403).json({ error: 'Not a participant of this job' });
-}
-Also verify the job status is `ACTIVE` or `FUNDED` before allowing a dispute.
-
-Acceptance Criteria
- Returns 403 when caller is not the client or freelancer on the job.
- Returns 400 when job is not in a disputable state.
- Existing participant-created disputes still succeed.
- Unit/integration test covers the unauthorized case.
+/services?category=design&minPrice=50&maxPrice=500&minRating=4
+On mount, initialise filter state from URL params so back-navigation restores the exact filtered view.
 
 
- #222 Fix: GET /api/jobs/:id does not include escrow funding status — frontend has no reliable source of truth for whether a job is funded
+#289 Build: add job and profile share button with copyable deep link — no social sharing or direct link feature exists
 Repo Avatar
 stellarmarket-labs/stellar-market
 Problem
-`GET /api/jobs/:id` returns the Postgres job record, but the `escrow_status` field is either absent or always `null`. The on-chain escrow state (Unfunded / Funded / Completed / Disputed) is never fetched from the Soroban contract and merged into the response.
+Users cannot easily share a job listing or freelancer profile with someone outside the platform. There is no share/copy-link affordance on job detail or profile pages.
 
-As a result:
+Acceptance criteria
+ Add a "Share" button to job detail and public profile pages.
+ On click: copy canonical URL to clipboard + show "Link copied!" toast.
+ If Web Share API is available (mobile), use native share sheet instead.
+ OG/Twitter meta tags on these pages should include title, description, and preview image (see companion SEO issue)
 
-The frontend cannot conditionally show "Fund Job" vs "View Escrow" CTAs.
-Issue #202 (escrow status badge) cannot be properly fixed without this data.
-The dispute creation guard (should block unfunded jobs) has no reliable source of truth.
-Proposed Fix
-In the job detail handler, after fetching the DB record:
+ #290 Build: add SEO metadata (og:title, og:description, canonical, Twitter card) to job and profile pages — all pages share identical generic meta tags
+Repo Avatar
+stellarmarket-labs/stellar-market
+Problem
+Every page on the site shares the same static Stellar Market and no Open Graph tags. Job listings and freelancer profiles that are shared externally show only a blank link preview with no context.
 
-If `on_chain_job_id` is present, call the Soroban RPC `get_job_status` view function.
-Merge the result into the response as `escrow_status: 'UNFUNDED' | 'FUNDED' | 'COMPLETED' | 'DISPUTED'`.
-Cache the result for 30 s to avoid hammering the RPC on repeated page loads.
-If the RPC call fails, fall back to the DB-stored status and log a warning.
+Acceptance criteria
+ Use Next.js generateMetadata (App Router) to set page-specific metadata.
+ Job detail: og:title = job title, og:description = first 160 chars of description, og:image = generated OG image or platform default.
+ Profile page: og:title = freelancer name + tagline, og:description = bio excerpt, og:image = avatar.
+ Canonical tag on all pages.
+ Twitter card summary_large_image meta.
 
-Acceptance Criteria
- `GET /api/jobs/:id` response includes `escrow_status`.
- Value reflects the current on-chain state for jobs with a valid `on_chain_job_id`.
- Returns DB fallback (not an error) when RPC is unavailable.
+ #288 Build: add mobile-responsive hamburger navigation — sidebar collapses on small screens but leaves no way to open it again
+Repo Avatar
+stellarmarket-labs/stellar-market
+Problem
+On viewports < 768 px the sidebar navigation collapses to nothing. There is no hamburger button or slide-out drawer to access navigation links, making the app unusable on mobile.
+
+Acceptance criteria
+ Add a hamburger icon button to the top navbar on mobile viewports.
+ Tapping it opens a full-height slide-in drawer with all nav links.
+ Drawer closes on link tap, backdrop tap, or swipe-left gesture.
+ Active route is highlighted.
+ Focus trap inside drawer for keyboard accessibility.
+ Tested on iOS Safari and Android Chrome.
+

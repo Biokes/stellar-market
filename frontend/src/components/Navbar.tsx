@@ -21,6 +21,7 @@ import { useState, useRef, useEffect } from "react";
 import { useWallet } from "@/context/WalletContext";
 import { useSocket } from "@/context/SocketContext";
 import { useAuth } from "@/context/AuthContext";
+import { usePathname } from "next/navigation";
 import ThemeToggleButton from "./ThemeToggleButton";
 import NotificationBell from "./NotificationBell";
 
@@ -194,8 +195,27 @@ function UnreadBadge() {
 export default function Navbar() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const { user } = useAuth();
+  const pathname = usePathname();
   const isClient = user?.role === "CLIENT";
   const isFreelancer = user?.role === "FREELANCER";
+
+  const navLinks = [
+    { href: "/jobs", label: isFreelancer ? "Find Work" : "Jobs", icon: Briefcase, hide: isClient },
+    { href: "/services", label: "Services", icon: Search },
+    { href: "/freelancers", label: "Talent", icon: Users },
+    { href: "/disputes", label: "Disputes", icon: ShieldCheck },
+    { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { href: "/messages", label: "Messages", icon: MessageSquare, id: "messages-nav-link" },
+  ];
+
+  if (isClient) {
+    navLinks.push({ href: "/post-job", label: "Post a Job", icon: PenLine });
+  }
+
+  const isActive = (path: string) => {
+    if (path === "/" && pathname !== "/") return false;
+    return pathname?.startsWith(path);
+  };
 
   return (
     <nav className="border-b border-theme-border bg-theme-bg/80 backdrop-blur-md sticky top-0 z-50">
@@ -207,64 +227,23 @@ export default function Navbar() {
               StellarMarket
             </span>
           </Link>
-          <div className="hidden md:flex items-center gap-8">
-            {/* Freelancers and unauthenticated users see the job browsing link */}
-            {!isClient && (
+          <div className="hidden md:flex items-center gap-6">
+            {navLinks.filter(l => !l.hide).map((link) => (
               <Link
-                href="/jobs"
-                className="text-theme-text hover:text-theme-heading transition-colors flex items-center gap-2"
+                key={link.href}
+                href={link.href}
+                id={link.id}
+                className={`transition-colors flex items-center gap-2 text-sm font-medium ${
+                  isActive(link.href)
+                    ? "text-stellar-blue"
+                    : "text-theme-text hover:text-theme-heading"
+                }`}
               >
-                <Briefcase size={16} />
-                {isFreelancer ? "Find Work" : "Jobs"}
+                <link.icon size={16} />
+                {link.label}
+                {link.href === "/messages" && <UnreadBadge />}
               </Link>
-            )}
-            <Link
-              href="/services"
-              className="text-theme-text hover:text-theme-heading transition-colors flex items-center gap-2"
-            >
-              <Search size={16} />
-              Services
-            </Link>
-            <Link
-              href="/freelancers"
-              className="text-theme-text hover:text-theme-heading transition-colors flex items-center gap-2"
-            >
-              <Users size={16} />
-              Talent
-            </Link>
-            <Link
-              href="/disputes"
-              className="text-theme-text hover:text-theme-heading transition-colors flex items-center gap-2"
-            >
-              <ShieldCheck size={16} />
-              Disputes
-            </Link>
-            <Link
-              href="/dashboard"
-              className="text-theme-text hover:text-theme-heading transition-colors flex items-center gap-2"
-            >
-              <LayoutDashboard size={16} />
-              Dashboard
-            </Link>
-            <Link
-              href="/messages"
-              id="messages-nav-link"
-              className="relative text-theme-text hover:text-theme-heading transition-colors flex items-center gap-2"
-            >
-              <MessageSquare size={16} />
-              Messages
-              <UnreadBadge />
-            </Link>
-            {/* Only clients see Post a Job */}
-            {isClient && (
-              <Link
-                href="/post-job"
-                className="text-theme-text hover:text-theme-heading transition-colors flex items-center gap-2"
-              >
-                <PenLine size={16} />
-                Post a Job
-              </Link>
-            )}
+            ))}
             <NotificationBell />
             <ThemeToggleButton />
             <UserMenu />
@@ -278,64 +257,68 @@ export default function Navbar() {
           </button>
         </div>
 
-        {mobileOpen && (
-          <div className="md:hidden pb-4 flex flex-col gap-4">
-            {!isClient && (
-              <Link
-                href="/jobs"
-                className="text-theme-text hover:text-theme-heading flex items-center gap-2"
-              >
-                <Briefcase size={18} />
-                {isFreelancer ? "Find Work" : "Jobs"}
-              </Link>
-            )}
-            <Link
-              href="/services"
-              className="text-theme-text hover:text-theme-heading flex items-center gap-2"
-            >
-              <Search size={18} /> Services
-            </Link>
-            <Link
-              href="/disputes"
-              className="text-theme-text hover:text-theme-heading flex items-center gap-2"
-            >
-              <ShieldCheck size={18} /> Disputes
-            </Link>
-            <Link
-              href="/dashboard"
-              className="text-theme-text hover:text-theme-heading flex items-center gap-2"
-            >
-              <LayoutDashboard size={18} /> Dashboard
-            </Link>
-            <Link
-              href="/messages"
-              className="relative text-theme-text hover:text-theme-heading flex items-center gap-2"
-            >
-              <MessageSquare size={18} />
-              Messages
-              <UnreadBadge />
-            </Link>
-            {isClient && (
-              <Link
-                href="/post-job"
-                className="text-theme-text hover:text-theme-heading flex items-center gap-2"
-              >
-                <PenLine size={18} /> Post a Job
-              </Link>
-            )}
-            <div className="pt-4 border-t border-theme-border flex items-center justify-between px-2">
-              <div className="flex items-center gap-4">
-                <span className="text-sm font-medium text-theme-text">Notifications</span>
-                <NotificationBell />
-              </div>
-              <div className="flex items-center gap-4">
-                <span className="text-sm font-medium text-theme-text">Theme</span>
-                <ThemeToggleButton />
+        {/* Mobile Drawer */}
+        <div
+          className={`fixed inset-0 z-50 md:hidden transition-opacity duration-300 ${
+            mobileOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+          }`}
+        >
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            onClick={() => setMobileOpen(false)}
+          />
+          
+          {/* Panel */}
+          <div
+            className={`absolute right-0 top-0 h-full w-72 bg-theme-bg border-l border-theme-border p-6 shadow-2xl transition-transform duration-300 ease-in-out ${
+              mobileOpen ? "translate-x-0" : "translate-x-full"
+            }`}
+          >
+            {/* Close Button */}
+            <div className="flex justify-between items-center mb-10">
+              <span className="text-lg font-bold text-theme-heading">Menu</span>
+              <button onClick={() => setMobileOpen(false)} className="p-2 text-theme-text hover:text-theme-heading">
+                <X size={24} />
+              </button>
+            </div>
+            
+            <div className="flex flex-col gap-2">
+              {navLinks.filter(l => !l.hide).map((link) => (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  onClick={() => setMobileOpen(false)}
+                  className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+                    isActive(link.href)
+                      ? "bg-stellar-blue/10 text-stellar-blue font-bold shadow-sm"
+                      : "text-theme-text hover:bg-theme-border/30"
+                  }`}
+                >
+                  <link.icon size={20} />
+                  <span>{link.label}</span>
+                  {link.href === "/messages" && <UnreadBadge />}
+                </Link>
+              ))}
+            </div>
+
+            <div className="mt-auto pt-8 border-t border-theme-border">
+              <div className="flex flex-col gap-4">
+                <div className="flex items-center justify-between px-4">
+                  <span className="text-sm font-medium text-theme-text">Notifications</span>
+                  <NotificationBell />
+                </div>
+                <div className="flex items-center justify-between px-4">
+                  <span className="text-sm font-medium text-theme-text">Theme</span>
+                  <ThemeToggleButton />
+                </div>
+                <div className="mt-4">
+                  <UserMenu className="w-full justify-between" />
+                </div>
               </div>
             </div>
-            <UserMenu className="w-fit" />
           </div>
-        )}
+        </div>
       </div>
     </nav>
   );

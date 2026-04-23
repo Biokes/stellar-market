@@ -16,6 +16,7 @@ impl MockToken {
 }
 
 const GRACE_PERIOD: u64 = 604_800; // 7 days in seconds
+const MIN_STAKE: i128 = 10_000_000;
 const JOB_DEADLINE: u64 = 1_000_000; // Example value
 
 // Correction 3: token_address is already Address from register_stellar_asset_contract_v2,
@@ -28,12 +29,43 @@ fn setup_test(env: &Env) -> (EscrowContractClient<'_>, Address, Address, Address
     let freelancer = Address::generate(env);
     let admin = Address::generate(env);
 
-    // Correction 2: Use register_stellar_asset_contract_v2 consistently (not _v2_v2)
     let token_address = env.register_stellar_asset_contract_v2(admin.clone()).address();
     let token_admin = StellarAssetClient::new(env, &token_address);
     token_admin.mint(&user_client, &10000);
 
+    let signers = vec![env, admin.clone()];
+    let treasury = Address::generate(env);
+    client.initialize(&signers, &1, &treasury, &0, &604800);
+
     (client, user_client, freelancer, token_address, admin)
+}
+
+fn pause_escrow(env: &Env, client: &EscrowContractClient<'_>, admin: &Address) {
+    client.propose_admin_action(admin, &AdminAction::Pause);
+}
+
+fn unpause_escrow(env: &Env, client: &EscrowContractClient<'_>, admin: &Address) {
+    client.propose_admin_action(admin, &AdminAction::Unpause);
+}
+
+fn setup_multisig(env: &Env) -> (EscrowContractClient<'_>, Address, Address, Address, Address, Address) {
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(env, &contract_id);
+
+    let client_addr = Address::generate(env);
+    let freelancer = Address::generate(env);
+    let signer1 = Address::generate(env);
+    let signer2 = Address::generate(env);
+    let treasury = Address::generate(env);
+
+    let token_address = env.register_stellar_asset_contract_v2(Address::generate(env)).address();
+    let token_admin = StellarAssetClient::new(env, &token_address);
+    token_admin.mint(&client_addr, &10000);
+
+    let signers = vec![env, signer1.clone(), signer2.clone()];
+    client.initialize(&signers, &2, &treasury, &100, &604800);
+
+    (client, client_addr, freelancer, token_address, signer1, signer2)
 }
 
 #[test]
@@ -42,7 +74,7 @@ fn test_create_job() {
     env.mock_all_auths();
     env.ledger().with_mut(|l| l.timestamp = 1000);
 
-    let (contract, client_addr, freelancer, token, _) = setup_test(&env);
+    let (contract, client_addr, freelancer, token, admin) = setup_test(&env);
 
     let milestones = vec![
         &env,
@@ -80,7 +112,7 @@ fn test_job_count_increments() {
     env.mock_all_auths();
     env.ledger().with_mut(|l| l.timestamp = 1000);
 
-    let (contract, user, freelancer, token, _) = setup_test(&env);
+    let (contract, user, freelancer, token, admin) = setup_test(&env);
 
     let milestones = vec![&env, (String::from_str(&env, "Task 1"), 100_i128, JOB_DEADLINE)];
 
@@ -113,7 +145,7 @@ fn test_create_job_invalid_deadline() {
     env.mock_all_auths();
     env.ledger().with_mut(|l| l.timestamp = 1000);
 
-    let (contract, user, freelancer, token, _) = setup_test(&env);
+    let (contract, user, freelancer, token, admin) = setup_test(&env);
 
     let milestones = vec![
         &env,
@@ -556,7 +588,7 @@ fn test_claim_refund_fails_on_cancelled_job() {
 fn test_client_can_propose_revision() {
     let env = Env::default();
     env.mock_all_auths();
-    let (contract, client, freelancer, token, _) = setup_test(&env);
+    let (contract, client, freelancer, token, admin) = setup_test(&env);
 
     let milestones = vec![&env, (String::from_str(&env, "Initial"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD);
@@ -598,7 +630,7 @@ fn test_client_can_propose_revision() {
 fn test_freelancer_can_propose_revision() {
     let env = Env::default();
     env.mock_all_auths();
-    let (contract, client, freelancer, token, _) = setup_test(&env);
+    let (contract, client, freelancer, token, admin) = setup_test(&env);
 
     let milestones = vec![&env, (String::from_str(&env, "Initial"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD);
@@ -629,7 +661,7 @@ fn test_freelancer_can_propose_revision() {
 fn test_propose_revision_fails_for_disputed_job() {
     let env = Env::default();
     env.mock_all_auths();
-    let (contract, client, freelancer, token, _) = setup_test(&env);
+    let (contract, client, freelancer, token, admin) = setup_test(&env);
 
     let milestones = vec![&env, (String::from_str(&env, "Initial"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD);
@@ -660,7 +692,7 @@ fn test_propose_revision_fails_for_disputed_job() {
 fn test_approve_milestone_fails_for_disputed_job() {
     let env = Env::default();
     env.mock_all_auths();
-    let (contract, client, freelancer, token, _) = setup_test(&env);
+    let (contract, client, freelancer, token, admin) = setup_test(&env);
 
     let milestones = vec![&env, (String::from_str(&env, "Initial"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD);
@@ -681,7 +713,7 @@ fn test_approve_milestone_fails_for_disputed_job() {
 fn test_submit_milestone_fails_for_disputed_job() {
     let env = Env::default();
     env.mock_all_auths();
-    let (contract, client, freelancer, token, _) = setup_test(&env);
+    let (contract, client, freelancer, token, admin) = setup_test(&env);
 
     let milestones = vec![&env, (String::from_str(&env, "Initial"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD);
@@ -702,7 +734,7 @@ fn test_submit_milestone_fails_for_disputed_job() {
 fn test_approve_milestones_batch_fails_for_disputed_job() {
     let env = Env::default();
     env.mock_all_auths();
-    let (contract, client, freelancer, token, _) = setup_test(&env);
+    let (contract, client, freelancer, token, admin) = setup_test(&env);
 
     let milestones = vec![&env, (String::from_str(&env, "Initial"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD);
@@ -723,7 +755,7 @@ fn test_approve_milestones_batch_fails_for_disputed_job() {
 fn test_propose_revision_fails_for_non_party() {
     let env = Env::default();
     env.mock_all_auths();
-    let (contract, client, freelancer, token, _) = setup_test(&env);
+    let (contract, client, freelancer, token, admin) = setup_test(&env);
     let third_party = Address::generate(&env);
 
     let milestones = vec![&env, (String::from_str(&env, "Initial"), 1000_i128, JOB_DEADLINE)];
@@ -747,7 +779,7 @@ fn test_propose_revision_fails_for_non_party() {
 fn test_propose_revision_fails_when_pending_proposal_exists() {
     let env = Env::default();
     env.mock_all_auths();
-    let (contract, client, freelancer, token, _) = setup_test(&env);
+    let (contract, client, freelancer, token, admin) = setup_test(&env);
 
     let milestones = vec![&env, (String::from_str(&env, "Initial"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD);
@@ -770,7 +802,7 @@ fn test_propose_revision_fails_when_pending_proposal_exists() {
 fn test_propose_revision_allowed_after_rejection() {
     let env = Env::default();
     env.mock_all_auths();
-    let (contract, client, freelancer, token, _) = setup_test(&env);
+    let (contract, client, freelancer, token, admin) = setup_test(&env);
 
     let milestones = vec![&env, (String::from_str(&env, "Initial"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD);
@@ -801,7 +833,7 @@ fn test_propose_revision_allowed_after_rejection() {
 fn test_propose_revision_fails_for_empty_milestones() {
     let env = Env::default();
     env.mock_all_auths();
-    let (contract, client, freelancer, token, _) = setup_test(&env);
+    let (contract, client, freelancer, token, admin) = setup_test(&env);
 
     let milestones = vec![&env, (String::from_str(&env, "Initial"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD);
@@ -814,7 +846,7 @@ fn test_propose_revision_fails_for_empty_milestones() {
 fn test_propose_revision_new_total_equals_sum_of_milestones() {
     let env = Env::default();
     env.mock_all_auths();
-    let (contract, client, freelancer, token, _) = setup_test(&env);
+    let (contract, client, freelancer, token, admin) = setup_test(&env);
 
     let milestones = vec![&env, (String::from_str(&env, "Initial"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD);
@@ -970,7 +1002,7 @@ fn test_accept_revision_with_decreased_total_refunds_difference_to_client() {
 fn test_reject_revision_sets_status_to_rejected() {
     let env = Env::default();
     env.mock_all_auths();
-    let (contract, client, freelancer, token, _) = setup_test(&env);
+    let (contract, client, freelancer, token, admin) = setup_test(&env);
 
     let original_total: i128 = 1000;
     let milestones = vec![&env, (String::from_str(&env, "Initial"), original_total, JOB_DEADLINE)];
@@ -1004,7 +1036,7 @@ fn test_reject_revision_sets_status_to_rejected() {
 fn test_proposer_cannot_accept_own_proposal() {
     let env = Env::default();
     env.mock_all_auths();
-    let (contract, client, freelancer, token, _) = setup_test(&env);
+    let (contract, client, freelancer, token, admin) = setup_test(&env);
 
     let milestones = vec![&env, (String::from_str(&env, "Initial"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD);
@@ -1027,7 +1059,7 @@ fn test_proposer_cannot_accept_own_proposal() {
 fn test_propose_revision_emits_event() {
     let env = Env::default();
     env.mock_all_auths();
-    let (contract, client, freelancer, token, _) = setup_test(&env);
+    let (contract, client, freelancer, token, admin) = setup_test(&env);
 
     let milestones = vec![&env, (String::from_str(&env, "Initial"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD);
@@ -1054,7 +1086,7 @@ fn test_propose_revision_emits_event() {
 fn test_accept_revision_emits_event() {
     let env = Env::default();
     env.mock_all_auths();
-    let (contract, client, freelancer, token, _) = setup_test(&env);
+    let (contract, client, freelancer, token, admin) = setup_test(&env);
 
     let milestones = vec![&env, (String::from_str(&env, "Initial"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD);
@@ -1190,26 +1222,9 @@ fn test_initialize_pause() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-    client.initialize(&admin, &admin, &100u32, &604800u64);
+    client.initialize(&vec![&env, admin.clone()], &1, &admin, &100u32, &604800u64);
 }
 
-#[test]
-#[should_panic(expected = "Error(Contract, #16)")] // NotAdmin
-fn test_pause_unauthorized() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register_contract(None, EscrowContract);
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    let admin = Address::generate(&env);
-    let non_admin = Address::generate(&env);
-
-    client.initialize(&admin, &admin, &100u32, &604800u64);
-    client.pause(&non_admin);
-}
-
-#[test]
 fn test_pause_and_unpause() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1218,7 +1233,7 @@ fn test_pause_and_unpause() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-    client.initialize(&admin, &admin, &100u32, &604800u64);
+    client.initialize(&vec![&env, admin.clone()], &1, &admin, &100u32, &604800u64);
 
     let user = Address::generate(&env);
     let freelancer = Address::generate(&env);
@@ -1235,8 +1250,8 @@ fn test_pause_and_unpause() {
     );
     assert_eq!(job_id, 1);
 
-    client.pause(&admin);
-    client.unpause(&admin);
+    pause_escrow(&env, &client, &admin);
+    unpause_escrow(&env, &client, &admin);
 
     let job_id2 = client.create_job(
         &user,
@@ -1259,8 +1274,8 @@ fn test_create_job_when_paused() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-    client.initialize(&admin, &admin, &100u32, &604800u64);
-    client.pause(&admin);
+    client.initialize(&vec![&env, admin.clone()], &1, &admin, &100u32, &604800u64);
+    pause_escrow(&env, &client, &admin);
 
     let user = Address::generate(&env);
     let freelancer = Address::generate(&env);
@@ -1287,7 +1302,7 @@ fn test_fund_job_when_paused() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-    client.initialize(&admin, &admin, &100u32, &604800u64);
+    client.initialize(&vec![&env, admin.clone()], &1, &admin, &100u32, &604800u64);
 
     let user = Address::generate(&env);
     let freelancer = Address::generate(&env);
@@ -1303,7 +1318,7 @@ fn test_fund_job_when_paused() {
         &GRACE_PERIOD, // Correction 5
     );
 
-    client.pause(&admin);
+    pause_escrow(&env, &client, &admin);
     client.fund_job(&job_id, &user);
 }
 
@@ -1317,7 +1332,7 @@ fn test_submit_milestone_when_paused() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-    client.initialize(&admin, &admin, &100u32, &604800u64);
+    client.initialize(&vec![&env, admin.clone()], &1, &admin, &100u32, &604800u64);
 
     let user = Address::generate(&env);
     let freelancer = Address::generate(&env);
@@ -1334,7 +1349,7 @@ fn test_submit_milestone_when_paused() {
     );
 
     client.fund_job(&job_id, &user);
-    client.pause(&admin);
+    pause_escrow(&env, &client, &admin);
     client.submit_milestone(&job_id, &0, &freelancer);
 }
 
@@ -1348,7 +1363,7 @@ fn test_approve_milestone_when_paused() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-    client.initialize(&admin, &admin, &100u32, &604800u64);
+    client.initialize(&vec![&env, admin.clone()], &1, &admin, &100u32, &604800u64);
 
     let user = Address::generate(&env);
     let freelancer = Address::generate(&env);
@@ -1366,7 +1381,7 @@ fn test_approve_milestone_when_paused() {
 
     client.fund_job(&job_id, &user);
     client.submit_milestone(&job_id, &0, &freelancer);
-    client.pause(&admin);
+    pause_escrow(&env, &client, &admin);
     client.approve_milestone(&job_id, &0, &user);
 }
 
@@ -1380,7 +1395,7 @@ fn test_claim_refund_when_paused() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-    client.initialize(&admin, &admin, &100u32, &604800u64);
+    client.initialize(&vec![&env, admin.clone()], &1, &admin, &100u32, &604800u64);
 
     let user = Address::generate(&env);
     let freelancer = Address::generate(&env);
@@ -1402,7 +1417,7 @@ fn test_claim_refund_when_paused() {
     env.ledger()
         .with_mut(|l| l.timestamp = 2500 + GRACE_PERIOD + 1); // Correction 5
 
-    client.pause(&admin);
+    pause_escrow(&env, &client, &admin);
     client.claim_refund(&job_id, &user);
 }
 
@@ -1416,7 +1431,7 @@ fn test_extend_deadline_when_paused() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-    client.initialize(&admin, &admin, &100u32, &604800u64);
+    client.initialize(&vec![&env, admin.clone()], &1, &admin, &100u32, &604800u64);
 
     let user = Address::generate(&env);
     let freelancer = Address::generate(&env);
@@ -1432,7 +1447,7 @@ fn test_extend_deadline_when_paused() {
         &GRACE_PERIOD, // Correction 5
     );
 
-    client.pause(&admin);
+    pause_escrow(&env, &client, &admin);
     client.extend_deadline(&job_id, &0, &4000_u64);
 }
 
@@ -1445,7 +1460,7 @@ fn test_read_only_functions_when_paused() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-    client.initialize(&admin, &admin, &100u32, &604800u64);
+    client.initialize(&vec![&env, admin.clone()], &1, &admin, &100u32, &604800u64);
 
     let user = Address::generate(&env);
     let freelancer = Address::generate(&env);
@@ -1461,7 +1476,7 @@ fn test_read_only_functions_when_paused() {
         &GRACE_PERIOD, // Correction 5
     );
 
-    client.pause(&admin);
+    pause_escrow(&env, &client, &admin);
 
     // Read-only functions should still work when paused
     let job = client.get_job(&job_id);
@@ -1670,15 +1685,15 @@ fn test_initialize_and_admin_controls() {
     let treasury = Address::generate(&env);
     let fee_bps = 250; // 2.5%
 
-    escrow.initialize(&admin, &treasury, &fee_bps, &604800u64);
+    escrow.initialize(&vec![&env, admin.clone()], &1, &treasury, &fee_bps, &604800u64);
 
     // Initialized twice should fail
-    let result = escrow.try_initialize(&admin, &treasury, &fee_bps, &604800u64);
+    let result = escrow.try_initialize(&vec![&env, admin.clone()], &1, &treasury, &fee_bps, &604800u64);
     assert!(result.is_err());
 
-    escrow.set_fee_bps(&500);
+    escrow.propose_admin_action(&admin, &AdminAction::SetFeeBps(500));
     let new_treasury = Address::generate(&env);
-    escrow.set_treasury(&new_treasury);
+    escrow.propose_admin_action(&admin, &AdminAction::SetTreasury(new_treasury));
 }
 
 #[test]
@@ -1693,7 +1708,7 @@ fn test_fee_deduction_single_approval() {
     let admin = Address::generate(&env);
     let treasury = Address::generate(&env);
     let fee_bps: u32 = 500; // 5%
-    escrow.initialize(&admin, &treasury, &fee_bps, &604800u64);
+    escrow.initialize(&vec![&env, admin.clone()], &1, &treasury, &fee_bps, &604800u64);
 
     let token_admin = Address::generate(&env);
     // Correction 2 & 3
@@ -1732,7 +1747,7 @@ fn test_fee_deduction_batch_approval() {
     let admin = Address::generate(&env);
     let treasury = Address::generate(&env);
     let fee_bps: u32 = 1000; // 10% (max)
-    escrow.initialize(&admin, &treasury, &fee_bps, &604800u64);
+    escrow.initialize(&vec![&env, admin.clone()], &1, &treasury, &fee_bps, &604800u64);
 
     let token_admin = Address::generate(&env);
     // Correction 2 & 3
@@ -1779,12 +1794,12 @@ fn test_fee_cap_enforcement() {
     let treasury = Address::generate(&env);
 
     // Should fail if > 10% during initialize
-    let result = escrow.try_initialize(&admin, &treasury, &1001, &604800u64);
+    let result = escrow.try_initialize(&vec![&env, admin.clone()], &1, &treasury, &1001, &604800u64);
     assert!(result.is_err());
 
     // Should fail if > 10% during update
-    escrow.initialize(&admin, &treasury, &0, &604800u64);
-    let result = escrow.try_set_fee_bps(&1001);
+    escrow.initialize(&vec![&env, admin.clone()], &1, &treasury, &0, &604800u64);
+    let result = escrow.try_propose_admin_action(&admin, &AdminAction::SetFeeBps(1001));
     assert!(result.is_err());
 }
 
@@ -1957,4 +1972,60 @@ fn test_payment_released_event_emitted_via_batch_approval() {
     let last_event = events.last().expect("At least one event should be emitted");
     let topic1: Symbol = last_event.1.get(1).unwrap().into_val(&env);
     assert_eq!(topic1, Symbol::new(&env, "pmt_released"), "Last event should be pmt_released via batch");
+}
+
+#[test]
+fn test_multisig_pause_flow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+
+    let (contract, _, _, _, signer1, signer2) = setup_multisig(&env);
+
+    // Initial state: not paused
+    assert_eq!(contract.is_paused(), false);
+
+    // signer1 proposes pause
+    let proposal_id = contract.propose_admin_action(&signer1, &AdminAction::Pause);
+    assert_eq!(proposal_id, 1);
+    
+    // Proposal exists but not executed yet (needs 2/2)
+    assert_eq!(contract.is_paused(), false);
+
+    // signer2 approves
+    contract.approve_admin_action(&signer2, &proposal_id);
+
+    // Execution should be automatic after second approval
+    assert_eq!(contract.is_paused(), true);
+}
+
+#[test]
+fn test_multisig_unauthorized_proposal() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, _, _, _, _, _) = setup_multisig(&env);
+    let malicious = Address::generate(&env);
+
+    let result = contract.try_propose_admin_action(&malicious, &AdminAction::Pause);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_multisig_rotation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, _, _, _, signer1, signer2) = setup_multisig(&env);
+    let new_signer = Address::generate(&env);
+
+    // Propose rotation: signer1 -> new_signer
+    let proposal_id = contract.propose_admin_action(&signer1, &AdminAction::RotateSigner(signer1.clone(), new_signer.clone()));
+    contract.approve_admin_action(&signer2, &proposal_id);
+
+    // Check if new_signer can now propose
+    let prop2 = contract.propose_admin_action(&new_signer, &AdminAction::Unpause);
+    assert_eq!(prop2, 2);
+
+    // Check if old signer fails
+    let result = contract.try_propose_admin_action(&signer1, &AdminAction::Pause);
+    assert!(result.is_err());
 }

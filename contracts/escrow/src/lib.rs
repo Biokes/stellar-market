@@ -44,6 +44,42 @@ pub enum EscrowError {
     /// A milestone is currently in progress or submitted — cancel is not allowed;
     /// the client must open a dispute instead.
     WorkInProgress = 25,
+    /// Threshold is 0, exceeds signer count, or a removal would drop below it.
+    InvalidThreshold = 26,
+    /// The address is not a registered multi-sig signer.
+    SignerNotFound = 27,
+    /// This signer has already approved the proposal.
+    MultiSigAlreadyApproved = 28,
+    /// The proposal has already been executed.
+    MultiSigAlreadyExecuted = 29,
+    /// No multi-sig proposal exists with this ID.
+    MultiSigProposalNotFound = 30,
+}
+
+/// Privileged actions that can be proposed and approved through the multi-sig flow.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum AdminAction {
+    Pause,
+    Unpause,
+    SetFeeBps(u32),
+    SetTreasury(Address),
+    AddSigner(Address),
+    RemoveSigner(Address),
+    ChangeThreshold(u32),
+    RotateSigner(Address, Address),
+}
+
+/// A pending multi-sig proposal. Executed when `approvals.len() >= threshold`.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MultiSigProposal {
+    pub id: u64,
+    pub action: AdminAction,
+    pub proposer: Address,
+    pub approvals: Vec<Address>,
+    pub executed: bool,
+    pub created_at: u64,
 }
 
 #[contracttype]
@@ -131,10 +167,14 @@ pub struct RevisionProposal {
 enum DataKey {
     Job(u64),
     JobCount,
-    Admin,
+    Admin, // Legacy single admin
     Paused,
     RevisionProposal(u64),
     ProposalExpiry,
+    MultiSigSigners,     // Vec<Address>
+    MultiSigThreshold,   // u32
+    MultiSigProposal(u64),
+    MultiSigProposalCount,
 }
 
 /// Default proposal expiry: 7 days in seconds.
@@ -156,17 +196,15 @@ fn require_not_paused(env: &Env) -> Result<(), EscrowError> {
     Ok(())
 }
 
-fn require_admin(env: &Env, admin: &Address) -> Result<(), EscrowError> {
-    let stored_admin: Address = env
-        .storage()
-        .instance()
-        .get(&symbol_short!("ADM"))
-        .ok_or(EscrowError::NotAdmin)?;
+/// Validates that every address in `callers` is a registered signer, calls
 
-    if admin != &stored_admin {
-        return Err(EscrowError::NotAdmin);
+
+fn is_signer(env: &Env, address: &Address) -> bool {
+    if let Some(signers) = env.storage().instance().get::<_, Vec<Address>>(&DataKey::MultiSigSigners) {
+        signers.iter().any(|s| s == *address)
+    } else {
+        false
     }
-    Ok(())
 }
 
 const MIN_TTL_THRESHOLD: u32 = 1_000;
@@ -191,22 +229,28 @@ pub struct EscrowContract;
 
 #[contractimpl]
 impl EscrowContract {
-    /// Initialize the contract with admin, treasury, fee basis points, and proposal expiry.
+    /// Initialize the contract with signers, threshold, treasury, fee basis points, and proposal expiry.
     pub fn initialize(
         env: Env,
-        admin: Address,
+        signers: Vec<Address>,
+        threshold: u32,
         treasury: Address,
         fee_bps: u32,
         proposal_expiry_secs: u64,
     ) -> Result<(), EscrowError> {
-        if env.storage().instance().has(&symbol_short!("ADM")) {
+        if env.storage().instance().has(&DataKey::MultiSigSigners) {
             return Err(EscrowError::AlreadyInitialized);
         }
         if fee_bps > MAX_FEE_BPS {
             return Err(EscrowError::InvalidStatus);
         }
+        if threshold == 0 || threshold > signers.len() {
+            return Err(EscrowError::InvalidThreshold);
+        }
 
-        env.storage().instance().set(&symbol_short!("ADM"), &admin);
+        env.storage().instance().set(&DataKey::MultiSigSigners, &signers);
+        env.storage().instance().set(&DataKey::MultiSigThreshold, &threshold);
+        
         env.storage()
             .instance()
             .set(&symbol_short!("TRE"), &treasury);
@@ -220,69 +264,164 @@ impl EscrowContract {
         Ok(())
     }
 
-    /// Pause the contract (admin only).
-    pub fn pause(env: Env, admin: Address) -> Result<(), EscrowError> {
-        admin.require_auth();
-        require_admin(&env, &admin)?;
 
-        env.storage().instance().set(&DataKey::Paused, &true);
-        bump_job_count_ttl(&env);
 
-        // Emit event
-        env.events().publish(
-            (symbol_short!("escrow"), symbol_short!("paused")),
-            (admin, env.ledger().timestamp()),
-        );
-
-        Ok(())
-    }
-
-    /// Unpause the contract (admin only).
-    pub fn unpause(env: Env, admin: Address) -> Result<(), EscrowError> {
-        admin.require_auth();
-        require_admin(&env, &admin)?;
-
-        env.storage().instance().set(&DataKey::Paused, &false);
-        bump_job_count_ttl(&env);
-
-        // Emit event
-        env.events().publish(
-            (symbol_short!("escrow"), symbol_short!("unpaused")),
-            (admin, env.ledger().timestamp()),
-        );
-
-        Ok(())
-    }
-
-    /// Set a new fee basis points value (admin only).
-    pub fn set_fee_bps(env: Env, new_fee: u32) -> Result<(), EscrowError> {
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&symbol_short!("ADM"))
-            .ok_or(EscrowError::Unauthorized)?;
-        admin.require_auth();
-
-        if new_fee > MAX_FEE_BPS {
-            return Err(EscrowError::InvalidStatus);
-        }
-
-        env.storage().instance().set(&symbol_short!("FEE"), &new_fee);
-        Ok(())
-    }
-
-    /// Set a new treasury address (admin only).
-    pub fn set_treasury(env: Env, new_treasury: Address) -> Result<(), EscrowError> {
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&symbol_short!("ADM"))
-            .ok_or(EscrowError::Unauthorized)?;
-        admin.require_auth();
-
+    /// Check if the contract is paused.
+    pub fn is_paused(env: Env) -> bool {
         env.storage()
             .instance()
-            .set(&symbol_short!("TRE"), &new_treasury);
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
+    pub fn propose_admin_action(env: Env, proposer: Address, action: AdminAction) -> Result<u64, EscrowError> {
+        proposer.require_auth();
+        if !is_signer(&env, &proposer) {
+            return Err(EscrowError::SignerNotFound);
+        }
+
+        let mut count: u64 = env.storage().instance().get(&DataKey::MultiSigProposalCount).unwrap_or(0);
+        count += 1;
+        
+        let mut approvals = Vec::new(&env);
+        approvals.push_back(proposer.clone());
+
+        let proposal = MultiSigProposal {
+            id: count,
+            action: action.clone(),
+            proposer: proposer.clone(),
+            approvals,
+            executed: false,
+            created_at: env.ledger().timestamp(),
+        };
+
+        env.storage().instance().set(&DataKey::MultiSigProposal(count), &proposal);
+        env.storage().instance().set(&DataKey::MultiSigProposalCount, &count);
+
+        env.events().publish(
+            (symbol_short!("msig"), symbol_short!("proposed")),
+            (count, proposer, action),
+        );
+
+        // Auto-execute if threshold is 1
+        let threshold: u32 = env.storage().instance().get(&DataKey::MultiSigThreshold).unwrap_or(1);
+        if threshold == 1 {
+            Self::execute_proposal(&env, count)?;
+        }
+
+        Ok(count)
+    }
+
+    pub fn approve_admin_action(env: Env, approver: Address, proposal_id: u64) -> Result<(), EscrowError> {
+        approver.require_auth();
+        if !is_signer(&env, &approver) {
+            return Err(EscrowError::SignerNotFound);
+        }
+
+        let mut proposal: MultiSigProposal = env.storage().instance().get(&DataKey::MultiSigProposal(proposal_id))
+            .ok_or(EscrowError::MultiSigProposalNotFound)?;
+
+        if proposal.executed {
+            return Err(EscrowError::MultiSigAlreadyExecuted);
+        }
+
+        if proposal.approvals.iter().any(|a| a == approver) {
+            return Err(EscrowError::MultiSigAlreadyApproved);
+        }
+
+        proposal.approvals.push_back(approver.clone());
+        env.storage().instance().set(&DataKey::MultiSigProposal(proposal_id), &proposal);
+
+        env.events().publish(
+            (symbol_short!("msig"), symbol_short!("approved")),
+            (proposal_id, approver),
+        );
+
+        let threshold: u32 = env.storage().instance().get(&DataKey::MultiSigThreshold).unwrap_or(1);
+        if proposal.approvals.len() >= threshold {
+            Self::execute_proposal(&env, proposal_id)?;
+        }
+
+        Ok(())
+    }
+
+    fn execute_proposal(env: &Env, proposal_id: u64) -> Result<(), EscrowError> {
+        let mut proposal: MultiSigProposal = env.storage().instance().get(&DataKey::MultiSigProposal(proposal_id))
+            .ok_or(EscrowError::MultiSigProposalNotFound)?;
+
+        if proposal.executed {
+            return Err(EscrowError::MultiSigAlreadyExecuted);
+        }
+
+        match proposal.action.clone() {
+            AdminAction::Pause => {
+                env.storage().instance().set(&DataKey::Paused, &true);
+                env.events().publish(
+                   (symbol_short!("paused"),),
+                   (env.current_contract_address(), env.ledger().timestamp()),
+                );
+            }
+            AdminAction::Unpause => {
+                env.storage().instance().set(&DataKey::Paused, &false);
+                env.events().publish(
+                    (symbol_short!("unpaused"),),
+                    (env.current_contract_address(), env.ledger().timestamp()),
+                );
+            }
+            AdminAction::SetFeeBps(fee) => {
+                if fee > MAX_FEE_BPS {
+                    return Err(EscrowError::InvalidStatus);
+                }
+                env.storage().instance().set(&symbol_short!("FEE"), &fee);
+            }
+            AdminAction::SetTreasury(treasury) => {
+                env.storage().instance().set(&symbol_short!("TRE"), &treasury);
+            }
+            AdminAction::AddSigner(signer) => {
+                let mut signers: Vec<Address> = env.storage().instance().get(&DataKey::MultiSigSigners).unwrap();
+                if !signers.iter().any(|s| s == signer) {
+                    signers.push_back(signer);
+                    env.storage().instance().set(&DataKey::MultiSigSigners, &signers);
+                }
+            }
+            AdminAction::RemoveSigner(signer) => {
+                let mut signers: Vec<Address> = env.storage().instance().get(&DataKey::MultiSigSigners).unwrap();
+                let threshold: u32 = env.storage().instance().get(&DataKey::MultiSigThreshold).unwrap_or(1);
+                
+                if let Some(idx) = signers.iter().position(|s| s == signer) {
+                    if signers.len() <= threshold {
+                        return Err(EscrowError::InvalidThreshold);
+                    }
+                    signers.remove(idx as u32);
+                    env.storage().instance().set(&DataKey::MultiSigSigners, &signers);
+                }
+            }
+            AdminAction::ChangeThreshold(new_threshold) => {
+                let signers: Vec<Address> = env.storage().instance().get(&DataKey::MultiSigSigners).unwrap();
+                if new_threshold == 0 || new_threshold > signers.len() {
+                    return Err(EscrowError::InvalidThreshold);
+                }
+                env.storage().instance().set(&DataKey::MultiSigThreshold, &new_threshold);
+            }
+            AdminAction::RotateSigner(old_signer, new_signer) => {
+                let mut signers: Vec<Address> = env.storage().instance().get(&DataKey::MultiSigSigners).unwrap();
+                if let Some(idx) = signers.iter().position(|s| s == old_signer) {
+                    signers.set(idx as u32, new_signer);
+                    env.storage().instance().set(&DataKey::MultiSigSigners, &signers);
+                } else {
+                    return Err(EscrowError::SignerNotFound);
+                }
+            }
+        }
+
+        proposal.executed = true;
+        env.storage().instance().set(&DataKey::MultiSigProposal(proposal_id), &proposal);
+
+        env.events().publish(
+            (symbol_short!("msig"), symbol_short!("executed")),
+            (proposal_id, proposal.action),
+        );
+
         Ok(())
     }
 

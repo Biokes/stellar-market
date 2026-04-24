@@ -30,7 +30,7 @@ import ProposeRevisionModal, {
 } from "@/components/ProposeRevisionModal";
 import { Job, Application, PaginatedResponse, Review } from "@/types";
 import { parseJobIdFromResult } from "@/utils/stellar";
-import { ShareButton } from "@/components/ShareButton";
+import ShareMenu from "@/components/ShareMenu";
 
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
@@ -53,6 +53,9 @@ export default function JobDetailClient() {
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [actioningMilestoneId, setActioningMilestoneId] = useState<
+    string | null
+  >(null);
+  const [confirmingMilestoneId, setConfirmingMilestoneId] = useState<
     string | null
   >(null);
   const [error, setError] = useState<string | null>(null);
@@ -399,6 +402,18 @@ export default function JobDetailClient() {
   const handleApproveMilestone = async (milestoneId: string) => {
     setError(null);
     setActioningMilestoneId(milestoneId);
+    const previousMilestones = job?.milestones ?? [];
+    setJob((prev) =>
+      prev
+        ? {
+            ...prev,
+            milestones: prev.milestones.map((m) =>
+              m.id === milestoneId ? { ...m, status: "APPROVED" } : m,
+            ),
+          }
+        : prev,
+    );
+    setConfirmingMilestoneId(milestoneId);
     try {
       const token =
         localStorage.getItem("stellarmarket_jwt") ??
@@ -433,8 +448,27 @@ export default function JobDetailClient() {
       await fetchJob();
       setRecentlyApprovedMilestoneId(milestoneId);
     } catch (err: unknown) {
+      // Roll back optimistic milestone status if on-chain confirmation fails.
+      setJob((prev) =>
+        prev
+          ? {
+              ...prev,
+              milestones: prev.milestones.map((m) =>
+                m.id === milestoneId
+                  ? {
+                      ...m,
+                      status:
+                        previousMilestones.find((pm) => pm.id === milestoneId)
+                          ?.status ?? m.status,
+                    }
+                  : m,
+              ),
+            }
+          : prev,
+      );
       setError(err instanceof Error ? err.message : "Action failed.");
     } finally {
+      setConfirmingMilestoneId(null);
       setActioningMilestoneId(null);
     }
   };
@@ -586,9 +620,10 @@ export default function JobDetailClient() {
           </h1>
 
           <div className="flex flex-wrap items-center gap-4 mb-8">
-            <ShareButton
+            <ShareMenu
               title={job.title}
-              text={`Check out this job on StellarMarket: ${job.title}`}
+              url={typeof window !== "undefined" ? window.location.href : ""}
+              description={`Check out this job on StellarMarket: ${job.title}`}
             />
           </div>
 
@@ -689,6 +724,7 @@ export default function JobDetailClient() {
               onRequestRevision={(milestoneId) =>
                 void handleUpdateMilestoneStatus(milestoneId, "REJECTED")
               }
+              confirmingMilestoneId={confirmingMilestoneId}
             />
           </div>
 

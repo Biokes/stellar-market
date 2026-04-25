@@ -29,7 +29,7 @@ export default function StatsSection() {
           setStats(response.data);
           setError(false);
         }
-      } catch (err) {
+      } catch {
         if (mounted) setError(true);
       } finally {
         if (mounted) setLoading(false);

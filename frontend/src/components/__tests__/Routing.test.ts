@@ -16,7 +16,7 @@ describe("Middleware Routing", () => {
       nextUrl: { pathname: "/" },
       cookies: { get: () => undefined },
       url: "http://localhost:3000/",
-    } as any;
+    } as unknown;
     
     const res = middleware(req);
     expect(res.headers.get("Location")).toBeUndefined();
@@ -27,7 +27,7 @@ describe("Middleware Routing", () => {
       nextUrl: { pathname: "/" },
       cookies: { get: () => ({ value: "fake-token" }) },
       url: "http://localhost:3000/",
-    } as any;
+    } as unknown;
     
     const res = middleware(req);
     expect(res.headers.get("Location")).toBeUndefined();
@@ -38,7 +38,7 @@ describe("Middleware Routing", () => {
       nextUrl: { pathname: "/dashboard" },
       cookies: { get: () => undefined },
       url: "http://localhost:3000/dashboard",
-    } as any;
+    } as unknown;
     
     const res = middleware(req);
     expect(res.headers.get("Location")).toBe("http://localhost:3000/auth/login");
@@ -49,7 +49,7 @@ describe("Middleware Routing", () => {
       nextUrl: { pathname: "/auth/login" },
       cookies: { get: () => ({ value: "fake-token" }) },
       url: "http://localhost:3000/auth/login",
-    } as any;
+    } as unknown;
     
     const res = middleware(req);
     expect(res.headers.get("Location")).toBe("http://localhost:3000/dashboard");

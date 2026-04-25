@@ -10,13 +10,19 @@ import axios from "axios";
 
 // Mock next/link
 jest.mock("next/link", () => {
-  return ({ children, href }: { children: React.ReactNode; href: string }) => (
+  const MockedLink = ({ children, href }: { children: React.ReactNode; href: string }) => (
     <a href={href}>{children}</a>
   );
+  MockedLink.displayName = "Link";
+  return MockedLink;
 });
 
 // Mock AuthContext
-let mockUser: any = null;
+interface MockUser {
+  id: string;
+  role: "FREELANCER" | "CLIENT";
+}
+let mockUser: MockUser | null = null;
 jest.mock("@/context/AuthContext", () => ({
   useAuth: () => ({
     user: mockUser,
@@ -25,7 +31,7 @@ jest.mock("@/context/AuthContext", () => ({
 
 // Mock axios
 jest.mock("axios");
-const mockedAxios = axios as jest.Mocked<typeof axios>;
+const mockedAxios = axios as jest.Mocked<typeof axios>; // eslint-disable-line @typescript-eslint/no-unused-vars
 
 describe("Landing Page Components", () => {
   beforeEach(() => {

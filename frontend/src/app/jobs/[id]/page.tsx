@@ -29,20 +29,20 @@ export async function generateMetadata({
     };
   }
 
+  const desc = job.description?.substring(0, 160) || "Check out this job on StellarMarket";
+
   return {
     title: `${job.title} | StellarMarket`,
-    description:
-      job.description?.substring(0, 160) ||
-      "Check out this job on StellarMarket",
+    description: desc,
     openGraph: {
       title: job.title,
-      description: job.description,
-      images: job.image ? [job.image] : [],
+      description: desc,
+      images: [{ url: job.imageUrl || "/og-default.png" }],
     },
     twitter: {
       card: "summary_large_image",
       title: job.title,
-      description: job.description,
+      description: desc,
     },
   };
 }

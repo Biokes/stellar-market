@@ -19,6 +19,19 @@ enum JobStatus {
   COMPLETED
   CANCELLED
   DISPUTED
+  EXPIRED
+}
+
+enum ReportTargetType {
+  JOB
+  USER
+  MESSAGE
+}
+
+enum ReportStatus {
+  PENDING
+  REVIEWED
+  DISMISSED
 }
 
 enum MilestoneStatus {
@@ -59,6 +72,14 @@ enum NotificationType {
   DISPUTE_RAISED
   DISPUTE_RESOLVED
   NEW_MESSAGE
+  BADGE_AWARDED
+}
+
+enum BadgeTier {
+  BRONZE
+  SILVER
+  GOLD
+  PLATINUM
 }
 
 enum DisputeStatus {
@@ -93,6 +114,7 @@ model User {
   availability           Boolean   @default(true)
   averageRating          Float     @default(0)
   reviewCount            Int       @default(0)
+  completedOnboarding    Boolean   @default(false)
 
   clientJobs         Job[]          @relation("ClientJobs")
   freelancerJobs     Job[]          @relation("FreelancerJobs")
@@ -113,6 +135,8 @@ model User {
   freelancerDisputes Dispute[]      @relation("DisputeFreelancer")
   votesCast          DisputeVote[]  @relation("VotesCast")
   savedJobs          SavedJob[]     @relation("SavedJobs")
+  reportsGiven       Report[]       @relation("ReportsGiven")
+  badges             Badge[]
 }
 
 model Job {
@@ -132,6 +156,7 @@ model Job {
   flagReason    String?
   flaggedAt     DateTime?
   flaggedBy     String?
+  deletedAt     DateTime?
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
 
@@ -145,6 +170,8 @@ model Job {
   attachments  Attachment[]
   dispute      Dispute?
   savedBy      SavedJob[]    @relation("SavedByFreelancers")
+
+  @@index([deletedAt])
 }
 
 model Milestone {
@@ -162,6 +189,7 @@ model Milestone {
 
   job          Job           @relation(fields: [jobId], references: [id], onDelete: Cascade)
   transactions Transaction[]
+  attachments  Attachment[]
 }
 
 model Application {
@@ -236,24 +264,27 @@ model Transaction {
 }
 
 model Attachment {
-  id           String   @id @default(cuid())
+  id           String    @id @default(cuid())
   uploaderId   String
   jobId        String?
   disputeId    String?
+  milestoneId  String?
   filename     String
   originalName String
   mimeType     String
   size         Int
   url          String
-  createdAt    DateTime @default(now())
+  createdAt    DateTime  @default(now())
 
-  uploader User     @relation(fields: [uploaderId], references: [id], onDelete: Cascade)
-  job      Job?     @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  dispute  Dispute? @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  uploader  User       @relation(fields: [uploaderId], references: [id], onDelete: Cascade)
+  job       Job?       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  dispute   Dispute?   @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  milestone Milestone? @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
 
   @@index([uploaderId])
   @@index([jobId])
   @@index([disputeId])
+  @@index([milestoneId])
   @@index([createdAt])
 }
 
@@ -363,4 +394,40 @@ model Service {
 model SystemState {
   key   String @id
   value String
+}
+
+model Report {
+  id         String           @id @default(cuid())
+  reporterId String
+  targetType ReportTargetType
+  targetId   String
+  reason     String
+  status     ReportStatus     @default(PENDING)
+  createdAt  DateTime         @default(now())
+
+  reporter User @relation("ReportsGiven", fields: [reporterId], references: [id], onDelete: Cascade)
+
+  @@index([reporterId])
+  @@index([targetType])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model SyncState {
+  id                String   @id @default("default")
+  lastIndexedLedger Int      @default(0)
+  updatedAt         DateTime @updatedAt
+}
+
+model Badge {
+  id            String    @id @default(cuid())
+  userId        String
+  tier          BadgeTier
+  awardedLedger Int
+  createdAt     DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tier])
+  @@index([userId])
 }

@@ -12,6 +12,7 @@ export interface User {
   averageRating?: number;
   reviewCount?: number;
   availability?: boolean;
+  completedOnboarding?: boolean;
 }
 
 export interface Milestone {
@@ -58,6 +59,7 @@ export interface Job {
   escrowStatus: "UNFUNDED" | "FUNDED" | "COMPLETED" | "CANCELLED" | "DISPUTED";
   revisionProposal?: RevisionProposal | null;
   createdAt: string;
+  updatedAt?: string;
   _count?: { applications: number };
 }
 

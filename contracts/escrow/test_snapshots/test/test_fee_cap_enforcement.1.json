@@ -61,6 +61,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "AllowedTokens"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "vec": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "MultiSigSigners"
                             }
                           ]
@@ -206,7 +218,7 @@
             ],
             "data": {
               "error": {
-                "contract": 3
+                "contract": 35
               }
             }
           }
@@ -227,7 +239,7 @@
               },
               {
                 "error": {
-                  "contract": 3
+                  "contract": 35
                 }
               }
             ],
@@ -252,7 +264,7 @@
               },
               {
                 "error": {
-                  "contract": 3
+                  "contract": 35
                 }
               }
             ],
@@ -458,7 +470,7 @@
             ],
             "data": {
               "error": {
-                "contract": 3
+                "contract": 35
               }
             }
           }
@@ -479,7 +491,7 @@
               },
               {
                 "error": {
-                  "contract": 3
+                  "contract": 35
                 }
               }
             ],
@@ -504,7 +516,7 @@
               },
               {
                 "error": {
-                  "contract": 3
+                  "contract": 35
                 }
               }
             ],

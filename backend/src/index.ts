@@ -2,16 +2,31 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import { createServer } from "http";
+import { PrismaClient } from "@prisma/client";
 import { config } from "./config";
 import routes from "./routes";
-import { globalRateLimiter, authRateLimiter, forgotPasswordRateLimiter, writeRateLimiter } from "./middleware/rate-limit";
+import {
+  globalRateLimiter,
+  authRateLimiter,
+  forgotPasswordRateLimiter,
+  writeRateLimiter,
+} from "./middleware/rate-limit";
 import { sanitizeInput } from "./middleware/sanitize";
 import { errorHandler } from "./middleware/error";
+import { requestIdMiddleware } from "./middleware/request-id";
 import { initSocket } from "./socket";
+import { startExpiryJob } from "./jobs/expiry.job";
+import { startHorizonListener, stopHorizonListener } from "./services/horizon-listener.service";
+import { installRequestIdConsolePatch } from "./lib/logger";
+import { getHealthStatus } from "./lib/health";
+import { RecommendationQueueService } from "./services/recommendation-queue.service";
 
 const app = express();
 import { swaggerUi, swaggerSpec } from "./config/swagger";
 const httpServer = createServer(app);
+const prisma = new PrismaClient();
+
+installRequestIdConsolePatch();
 
 // Attach Socket.io
 initSocket(httpServer);
@@ -28,22 +43,26 @@ const corsOptions: cors.CorsOptions = {
 };
 
 // Security middleware
-  // Swagger UI setup (disabled in production)
-  if (process.env.NODE_ENV !== "production") {
-    app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
-    app.get("/api/openapi.json", (_req, res) => {
-      res.setHeader("Content-Type", "application/json");
-      res.send(swaggerSpec);
-    });
-  }
 app.use(helmet());
+
+// Swagger UI setup (disabled in production)
+if (process.env.NODE_ENV !== "production") {
+  app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+  app.get("/api/openapi.json", (_req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    res.send(swaggerSpec);
+  });
+}
 app.use(cors(corsOptions));
-app.use(express.json());
+app.use(requestIdMiddleware);
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 app.use(sanitizeInput);
 
 // Health check
-app.get("/health", (_req, res) => {
-  res.json({ status: "ok", service: "stellarmarket-api" });
+app.get("/health", async (_req, res) => {
+  const health = await getHealthStatus(prisma);
+  res.status(health.status === "ok" ? 200 : 503).json(health);
 });
 
 // Rate limiting
@@ -69,8 +88,36 @@ app.use((_req, res) => {
 // Error handler
 app.use(errorHandler);
 
-httpServer.listen(config.port, () => {
-  console.log(`StellarMarket API running on port ${config.port}`);
-});
+function startServer(): void {
+  httpServer.listen(config.port, () => {
+    console.log(`StellarMarket API running on port ${config.port}`);
+    startExpiryJob();
+    startHorizonListener();
+    RecommendationQueueService.startWorker();
+  });
+}
 
-export { app, httpServer };
+async function gracefulShutdown(signal: string): Promise<void> {
+  console.log(`${signal} received, shutting down gracefully...`);
+
+  stopHorizonListener();
+  RecommendationQueueService.stopWorker();
+
+  const { NotificationService } =
+    await import("./services/notification.service");
+  await NotificationService.flushAllBatches();
+
+  httpServer.close(() => {
+    console.log("Server closed");
+    process.exit(0);
+  });
+}
+
+process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => void gracefulShutdown("SIGINT"));
+
+if (require.main === module) {
+  startServer();
+}
+
+export { app, httpServer, startServer };

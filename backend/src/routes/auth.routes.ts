@@ -3,7 +3,7 @@ import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
-import { generateSecret, generateSync, verifySync, generateURI } from "otplib";
+import { generateSecret, verifySync, generateURI } from "otplib";
 import QRCode from "qrcode";
 import { config } from "../config";
 import { validate } from "../middleware/validation";
@@ -33,6 +33,19 @@ const router = Router();
 const prisma = new PrismaClient();
 
 const RESET_TOKEN_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
+/** Single-use recovery codes issued when 2FA is enabled or regenerated (bcrypt-hashed in DB). */
+const RECOVERY_CODE_COUNT = 10;
+
+async function generateRecoveryCodeSets(): Promise<{ plain: string[]; hashed: string[] }> {
+  const plain: string[] = [];
+  const hashed: string[] = [];
+  for (let i = 0; i < RECOVERY_CODE_COUNT; i++) {
+    const code = crypto.randomBytes(4).toString("hex");
+    plain.push(code);
+    hashed.push(await bcrypt.hash(code, 10));
+  }
+  return { plain, hashed };
+}
 
 // Register a new user
 router.post(
@@ -122,6 +135,9 @@ router.post(
 
     const hashedPassword = password ? await bcrypt.hash(password, 10) : null;
 
+    const rawToken = generateToken();
+    const hashed = hashToken(rawToken);
+
     const user = await prisma.user.create({
       data: {
         walletAddress: stellarAddress,
@@ -129,8 +145,14 @@ router.post(
         username: name,
         password: hashedPassword,
         role: role ?? "FREELANCER",
+        emailVerified: false,
+        emailVerificationToken: hashed,
       },
     });
+
+    if (email) {
+      await sendVerificationEmail(email, rawToken);
+    }
 
     const token = jwt.sign({ userId: user.id }, config.jwtSecret, {
       expiresIn: "7d",
@@ -143,6 +165,7 @@ router.post(
         username: user.username,
         email: user.email,
         role: user.role,
+        emailVerified: user.emailVerified,
       },
       token,
     });
@@ -220,20 +243,11 @@ router.post(
     const secret = generateSecret();
     const encryptedSecret = encrypt(secret);
 
-    // Generate 8 backup codes
-    const backupCodesPlain: string[] = [];
-    const backupCodesHashed: string[] = [];
-    for (let i = 0; i < 8; i++) {
-      const code = crypto.randomBytes(4).toString("hex"); // 8-char hex code
-      backupCodesPlain.push(code);
-      backupCodesHashed.push(await bcrypt.hash(code, 10));
-    }
-
     await prisma.user.update({
       where: { id: req.userId },
       data: {
         twoFactorSecret: encryptedSecret,
-        backupCodes: backupCodesHashed,
+        backupCodes: [],
       },
     });
 
@@ -248,14 +262,63 @@ router.post(
     res.json({
       qrCode: qrCodeDataUrl,
       secret,
-      backupCodes: backupCodesPlain,
     });
   }),
 );
 
-// POST /2fa/verify — Verify TOTP code and enable 2FA
+// POST /2fa/verify — Verify TOTP code, enable 2FA, return one-time recovery codes
+const twoFactorEnableHandler = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const user = await prisma.user.findUnique({ where: { id: req.userId } });
+  if (!user) {
+    return res.status(404).json({ error: "User not found." });
+  }
+
+  if (user.twoFactorEnabled) {
+    return res.status(400).json({ error: "2FA is already enabled." });
+  }
+
+  if (!user.twoFactorSecret) {
+    return res.status(400).json({ error: "2FA setup not initiated. Call /2fa/setup first." });
+  }
+
+  const secret = decrypt(user.twoFactorSecret);
+  const result = verifySync({ token: req.body.code, secret });
+
+  if (!result.valid) {
+    return res.status(400).json({ error: "Invalid verification code." });
+  }
+
+  const { plain: recoveryCodes, hashed } = await generateRecoveryCodeSets();
+
+  await prisma.user.update({
+    where: { id: req.userId },
+    data: { twoFactorEnabled: true, backupCodes: hashed },
+  });
+
+  res.json({
+    message: "2FA has been enabled successfully.",
+    recoveryCodes,
+  });
+});
+
 router.post(
   "/2fa/verify",
+  authenticate,
+  validate({ body: twoFactorVerifySchema }),
+  twoFactorEnableHandler,
+);
+
+// POST /2fa/enable — Alias for verify (TOTP confirmation + recovery codes on first enable)
+router.post(
+  "/2fa/enable",
+  authenticate,
+  validate({ body: twoFactorVerifySchema }),
+  twoFactorEnableHandler,
+);
+
+// POST /2fa/regenerate — New recovery codes (requires current TOTP); invalidates existing codes
+router.post(
+  "/2fa/regenerate",
   authenticate,
   validate({ body: twoFactorVerifySchema }),
   asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -264,27 +327,27 @@ router.post(
       return res.status(404).json({ error: "User not found." });
     }
 
-    if (user.twoFactorEnabled) {
-      return res.status(400).json({ error: "2FA is already enabled." });
-    }
-
-    if (!user.twoFactorSecret) {
-      return res.status(400).json({ error: "2FA setup not initiated. Call /2fa/setup first." });
+    if (!user.twoFactorEnabled || !user.twoFactorSecret) {
+      return res.status(400).json({ error: "2FA is not enabled." });
     }
 
     const secret = decrypt(user.twoFactorSecret);
     const result = verifySync({ token: req.body.code, secret });
-
     if (!result.valid) {
       return res.status(400).json({ error: "Invalid verification code." });
     }
 
+    const { plain: recoveryCodes, hashed } = await generateRecoveryCodeSets();
+
     await prisma.user.update({
       where: { id: req.userId },
-      data: { twoFactorEnabled: true },
+      data: { backupCodes: hashed },
     });
 
-    res.json({ message: "2FA has been enabled successfully." });
+    res.json({
+      message: "Recovery codes have been regenerated. Store them securely; old codes no longer work.",
+      recoveryCodes,
+    });
   }),
 );
 
@@ -325,7 +388,7 @@ router.post(
   }),
 );
 
-// POST /2fa/validate — Validate TOTP or backup code during login
+// POST /2fa/validate — Validate TOTP or recovery code during login
 router.post(
   "/2fa/validate",
   validate({ body: twoFactorValidateSchema }),
@@ -370,9 +433,10 @@ router.post(
       }
     }
 
-    // Try backup codes
+    // Try recovery (backup) codes — 8-char hex, distinct from 6-digit TOTP
+    const recoveryInput = code.trim().toLowerCase();
     for (let i = 0; i < user.backupCodes.length; i++) {
-      const match = await bcrypt.compare(code, user.backupCodes[i]);
+      const match = await bcrypt.compare(recoveryInput, user.backupCodes[i]);
       if (match) {
         // Consume the backup code
         const updatedCodes = [...user.backupCodes];

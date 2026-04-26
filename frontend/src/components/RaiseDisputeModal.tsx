@@ -26,14 +26,25 @@ export default function RaiseDisputeModal({
   const [minVotes, setMinVotes] = useState<number>(3);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reasonTouched, setReasonTouched] = useState(false);
 
   if (!isOpen) return null;
 
   // Check if escrow is funded
   const isEscrowFunded = job.escrowStatus === "FUNDED";
 
+  const trimmedReason = reason.trim();
+  const reasonError =
+    trimmedReason.length === 0
+      ? "Please describe the dispute reason."
+      : trimmedReason.length < 20
+        ? "Please describe the dispute in at least 20 characters."
+        : null;
+  const canSubmit = isEscrowFunded && !processing && !reasonError;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setReasonTouched(true);
 
     // Validate escrow status
     if (!isEscrowFunded) {
@@ -41,9 +52,14 @@ export default function RaiseDisputeModal({
       return;
     }
 
-    if (reason.length < 10) {
+    if (reasonError) {
+      setError(reasonError);
+      return;
+    }
+
+    if (reason.length > 2000) {
       setError(
-        "Please provide a more detailed reason for the dispute (at least 10 characters).",
+        "Reason must not exceed 2000 characters. Please shorten your description.",
       );
       return;
     }
@@ -137,12 +153,33 @@ export default function RaiseDisputeModal({
               placeholder="Explain clearly why you are initiating a dispute. Provide specific details about unfulfilled requirements or issues."
               value={reason}
               onChange={(e) => setReason(e.target.value)}
+              onBlur={() => setReasonTouched(true)}
               disabled={processing}
+              maxLength={2000}
               required
             />
-            <p className="text-xs text-theme-text mt-1">
-              This will be visible to community voters.
-            </p>
+            <div className="flex justify-between items-center mt-1">
+              <p className="text-xs text-theme-text">
+                This will be visible to community voters.
+              </p>
+              <span
+                className={`text-xs tabular-nums ${
+                  reason.length >= 2000
+                    ? "text-theme-error font-semibold"
+                    : "text-theme-text"
+                }`}
+              >
+                {reason.length} / 2000
+              </span>
+            </div>
+            {reason.length >= 2000 && (
+              <p className="text-xs text-theme-error mt-1">
+                Character limit reached. Please shorten your description.
+              </p>
+            )}
+            {reasonTouched && reasonError && (
+              <p className="text-xs text-theme-error mt-1">{reasonError}</p>
+            )}
           </div>
 
           <div>
@@ -175,7 +212,7 @@ export default function RaiseDisputeModal({
             </button>
             <button
               type="submit"
-              disabled={processing || !isEscrowFunded}
+              disabled={!canSubmit}
               className="btn-primary flex-1 bg-theme-error hover:bg-theme-error/90 border border-transparent text-white disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {processing ? (

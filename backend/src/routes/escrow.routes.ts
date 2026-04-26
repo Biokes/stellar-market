@@ -6,6 +6,7 @@ import { ContractService } from "../services/contract.service";
 import { NotificationService } from "../services/notification.service";
 import { config } from "../config";
 import {
+  invalidateCache,
   invalidateCacheKey,
   generateJobCacheKey,
   generateJobOnChainStatusCacheKey,
@@ -13,6 +14,13 @@ import {
 
 const router = Router();
 const prisma = new PrismaClient();
+const indexerCursorState: {
+  cursor: string | null;
+  updatedAt: string;
+} = {
+  cursor: null,
+  updatedAt: new Date().toISOString(),
+};
 
 /**
  * Request XDR to create a job on-chain.
@@ -354,6 +362,7 @@ router.post("/confirm-tx", authenticate, asyncHandler(async (req: AuthRequest, r
       data: { contractDeadline: new Date(newDeadline) },
     });
   } else if (type === "SUBMIT_MILESTONE" && milestoneId) {
+    let affectedJobId: string | null = null;
     await prisma.$transaction(async (tx) => {
       const updatedMilestone = await tx.milestone.update({
         where: { id: milestoneId },
@@ -362,6 +371,7 @@ router.post("/confirm-tx", authenticate, asyncHandler(async (req: AuthRequest, r
       });
 
       if (!updatedMilestone.jobId) return;
+      affectedJobId = updatedMilestone.jobId;
 
       await NotificationService.sendNotification({
         userId: updatedMilestone.job.clientId,
@@ -371,7 +381,13 @@ router.post("/confirm-tx", authenticate, asyncHandler(async (req: AuthRequest, r
         metadata: { jobId: updatedMilestone.jobId, milestoneId: updatedMilestone.id },
       });
     });
+    if (affectedJobId) {
+      await invalidateCache("jobs:list:*");
+      await invalidateCacheKey(generateJobOnChainStatusCacheKey(affectedJobId));
+      await invalidateCacheKey(generateJobCacheKey(affectedJobId));
+    }
   } else if (type === "APPROVE_MILESTONE" && milestoneId) {
+    let affectedJobId: string | null = null;
     await prisma.$transaction(async (tx) => {
       // Step 1: Update milestone status
       const updatedMilestone = await tx.milestone.update({
@@ -381,6 +397,7 @@ router.post("/confirm-tx", authenticate, asyncHandler(async (req: AuthRequest, r
       });
 
       if (!updatedMilestone.jobId) return;
+      affectedJobId = updatedMilestone.jobId;
 
       // Step 2: Check if all milestones are approved to update job status
       const allMilestones = await tx.milestone.findMany({ 
@@ -408,6 +425,11 @@ router.post("/confirm-tx", authenticate, asyncHandler(async (req: AuthRequest, r
         });
       }
     });
+    if (affectedJobId) {
+      await invalidateCache("jobs:list:*");
+      await invalidateCacheKey(generateJobOnChainStatusCacheKey(affectedJobId));
+      await invalidateCacheKey(generateJobCacheKey(affectedJobId));
+    }
   } else if (type === "PROPOSE_REVISION" && jobId) {
     await invalidateCacheKey(generateJobOnChainStatusCacheKey(jobId));
     await invalidateCacheKey(generateJobCacheKey(jobId));
@@ -428,5 +450,30 @@ router.post("/confirm-tx", authenticate, asyncHandler(async (req: AuthRequest, r
 
   res.json({ message: "Transaction confirmed and database updated." });
 }));
+
+/**
+ * Expose/track indexer cursor state for escrow event sync workers.
+ */
+router.get(
+  "/indexer/cursor",
+  authenticate,
+  asyncHandler(async (_req: AuthRequest, res: Response) => {
+    res.json(indexerCursorState);
+  }),
+);
+
+router.put(
+  "/indexer/cursor",
+  authenticate,
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const cursor = typeof req.body?.cursor === "string" ? req.body.cursor.trim() : "";
+    if (!cursor) {
+      return res.status(400).json({ error: "cursor is required." });
+    }
+    indexerCursorState.cursor = cursor;
+    indexerCursorState.updatedAt = new Date().toISOString();
+    return res.json(indexerCursorState);
+  }),
+);
 
 export default router;

@@ -177,6 +177,17 @@ pub struct RevisionProposal {
     pub created_at: u64,
 }
 
+/// A snapshot of milestones at a specific point in time for audit trail purposes.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MilestoneRevision {
+    pub revision_index: u32,
+    pub milestones: Vec<Milestone>,
+    pub total_amount: i128,
+    pub revised_at: u64,
+    pub revised_by: Address,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum DataKey {
@@ -191,6 +202,7 @@ enum DataKey {
     MultiSigThreshold,   // u32
     MultiSigProposal(u64),
     MultiSigProposalCount,
+    RevisionHistory(u64), // Vec<MilestoneRevision> keyed by job_id
 }
 
 /// Default proposal expiry: 7 days in seconds.
@@ -1432,6 +1444,10 @@ impl EscrowContract {
     /// ## If new_total == old_total (no budget change):
     ///   - Only milestone structure changes — no token movement occurs
     ///
+    /// ## Revision History:
+    ///   - Before overwriting, the current milestone structure is snapshotted
+    ///   - The snapshot is appended to an immutable revision history for audit trail
+    ///
     /// # Errors
     /// * `RevisionProposalNotFound` — if no proposal exists for this job
     /// * `ProposalNotPending` — if the proposal is not in Pending status
@@ -1467,12 +1483,39 @@ impl EscrowContract {
             return Err(EscrowError::NotAuthorizedForProposalAction);
         }
 
-        // 4. Compute balance delta
+        // 4. Snapshot current milestones to revision history BEFORE overwriting
+        let mut history: Vec<MilestoneRevision> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RevisionHistory(job_id))
+            .unwrap_or(Vec::new(&env));
+
+        let revision_index = history.len();
+        let snapshot = MilestoneRevision {
+            revision_index: revision_index as u32,
+            milestones: job.milestones.clone(),
+            total_amount: job.total_amount,
+            revised_at: env.ledger().timestamp(),
+            revised_by: caller.clone(),
+        };
+        history.push_back(snapshot);
+
+        // Store updated history
+        env.storage()
+            .persistent()
+            .set(&DataKey::RevisionHistory(job_id), &history);
+        env.storage().persistent().extend_ttl(
+            &DataKey::RevisionHistory(job_id),
+            MIN_TTL_THRESHOLD,
+            MIN_TTL_EXTEND_TO,
+        );
+
+        // 5. Compute balance delta
         let old_total = job.total_amount;
         let new_total = proposal.new_total;
         let delta = new_total - old_total; // positive = increase, negative = decrease, zero = unchanged
 
-        // 5. Handle escrow balance adjustment
+        // 6. Handle escrow balance adjustment
         let token_client = token::Client::new(&env, &job.token);
 
         if delta > 0 {
@@ -1493,21 +1536,21 @@ impl EscrowContract {
         }
         // delta == 0: no token movement needed
 
-        // 6. Update job milestones and total
+        // 7. Update job milestones and total
         job.milestones = proposal.new_milestones.clone();
         job.total_amount = new_total;
 
-        // 7. Persist updated job
+        // 8. Persist updated job
         env.storage().persistent().set(&get_job_key(job_id), &job);
         bump_job_ttl(&env, job_id);
 
-        // 8. Update proposal status to Accepted
+        // 9. Update proposal status to Accepted
         proposal.status = ProposalStatus::Accepted;
         env.storage()
             .persistent()
             .set(&DataKey::RevisionProposal(job_id), &proposal);
 
-        // 9. Emit event
+        // 10. Emit event
         env.events().publish(
             (Symbol::new(&env, "revision_accepted"),),
             (job_id, caller, new_total, delta),
@@ -1587,6 +1630,30 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .get::<DataKey, RevisionProposal>(&DataKey::RevisionProposal(job_id))
+    }
+
+    /// Returns the complete revision history for a job as an append-only audit trail.
+    ///
+    /// Each entry in the history represents a snapshot of the milestone structure
+    /// at the time a revision was accepted. The history is ordered chronologically,
+    /// with index 0 being the oldest revision and the last entry being the most recent.
+    ///
+    /// # Arguments
+    /// * `job_id` — The job whose revision history to retrieve
+    ///
+    /// # Returns
+    /// A vector of `MilestoneRevision` snapshots. Returns an empty vector if no
+    /// revisions have been accepted for this job.
+    ///
+    /// # Use Cases
+    /// - Audit trail for dispute resolution
+    /// - Transparency for both parties to see how scope evolved
+    /// - Historical record for compliance and reporting
+    pub fn get_revision_history(env: Env, job_id: u64) -> Vec<MilestoneRevision> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::RevisionHistory(job_id))
+            .unwrap_or(Vec::new(&env))
     }
     /// Expire a job whose deadline has passed. Callable by anyone.
     ///

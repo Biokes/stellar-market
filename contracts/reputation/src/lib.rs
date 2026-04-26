@@ -1289,7 +1289,7 @@ impl ReputationContract {
 
         env.events().publish(
             (symbol_short!("reput"), symbol_short!("appealed")),
-            (reviewer, reviewee, job_id, reason),
+            (reviewer, reviewee, job_id, reason.clone()),
         );
 
         Ok(())

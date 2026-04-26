@@ -802,6 +802,23 @@ impl DisputeContract {
             .unwrap_or(Vec::new(&env))
     }
 
+    /// Get all arbitrators (voters) who have voted on a dispute.
+    pub fn get_arbitrators(env: Env, dispute_id: u64) -> Vec<Address> {
+        let votes: Vec<Vote> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Votes(dispute_id))
+            .unwrap_or(Vec::<Vote>::new(&env));
+        
+        let mut arbitrators: Vec<Address> = Vec::new(&env);
+        for vote in votes.iter() {
+            if !arbitrators.contains(&vote.voter) {
+                arbitrators.push_back(vote.voter.clone());
+            }
+        }
+        arbitrators
+    }
+
     /// Get total dispute count.
     pub fn get_dispute_count(env: Env) -> u64 {
         env.storage()

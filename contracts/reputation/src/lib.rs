@@ -540,7 +540,7 @@ impl ReputationContract {
         // Emit event
         env.events().publish(
             (symbol_short!("reput"), symbol_short!("reviewed")),
-            (reviewer, reviewee, job_id, rating),
+            (reviewer, reviewee, job_id, rating, comment, stake_weight),
         );
 
         Ok(())
@@ -717,7 +717,7 @@ impl ReputationContract {
 
             env.events().publish(
                 (symbol_short!("reput"), symbol_short!("ref_rwrd")),
-                (referrer.clone(), earned_score),
+                (referrer.clone(), earned_score, user.clone()),
             );
         }
     }
@@ -1289,7 +1289,7 @@ impl ReputationContract {
 
         env.events().publish(
             (symbol_short!("reput"), symbol_short!("appealed")),
-            (reviewer, reviewee, job_id),
+            (reviewer, reviewee, job_id, reason),
         );
 
         Ok(())

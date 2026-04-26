@@ -567,7 +567,7 @@ impl DisputeContract {
         // Emit event
         env.events().publish(
             (symbol_short!("dispute"), symbol_short!("raised")),
-            (count, job_id, initiator),
+            (count, job_id, initiator, client, freelancer),
         );
 
         Ok(count)
@@ -657,7 +657,7 @@ impl DisputeContract {
         // Emit event
         env.events().publish(
             (symbol_short!("dispute"), symbol_short!("voted")),
-            (dispute_id, voter, choice),
+            (dispute_id, voter, choice, dispute.job_id, dispute.client, dispute.freelancer),
         );
 
         Ok(())
@@ -705,7 +705,7 @@ impl DisputeContract {
         // Emit event
         env.events().publish(
             (symbol_short!("dispute"), symbol_short!("excluded")),
-            (dispute_id, voter),
+            (dispute_id, voter, dispute.job_id, dispute.client, dispute.freelancer),
         );
 
         Ok(())
@@ -916,9 +916,11 @@ fn internal_resolve(
                 ],
             );
 
+            let client = dispute.client.clone();
+            let freelancer = dispute.freelancer.clone();
             env.events().publish(
                 (symbol_short!("dispute"), Symbol::new(env, "stk_slashed")),
-                (dispute.job_id, loser, slash_amount),
+                (dispute.job_id, loser, slash_amount, client, freelancer),
             );
         }
 
@@ -933,9 +935,11 @@ fn internal_resolve(
         .set(&DataKey::Dispute(dispute_id), &*dispute);
     bump_dispute_ttl(env, dispute_id);
 
+    let client = dispute.client.clone();
+    let freelancer = dispute.freelancer.clone();
     env.events().publish(
         (symbol_short!("dispute"), symbol_short!("resolved")),
-        (dispute_id, dispute.status.clone()),
+        (dispute_id, dispute.status.clone(), dispute.job_id, client, freelancer, resolution),
     );
 
     Ok(dispute.status.clone())

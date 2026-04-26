@@ -1278,7 +1278,7 @@ impl ReputationContract {
             reviewer: reviewer.clone(),
             reviewee: reviewee.clone(),
             job_id,
-            reason,
+            reason: reason.clone(),
             created_at: now,
             expires_at: review.timestamp.saturating_add(APPEAL_GRACE_WINDOW_SECONDS),
             status: AppealStatus::Pending,

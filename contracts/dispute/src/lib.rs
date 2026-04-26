@@ -940,12 +940,12 @@ fn internal_resolve(
                 (dispute.job_id, loser, slash_amount, client, freelancer),
             );
         }
-
-        env.storage()
-            .persistent()
-            .set(&DataKey::LastDisputeClosedAt(dispute.job_id), &env.ledger().timestamp());
-        bump_last_dispute_closed_ttl(env, dispute.job_id);
     }
+
+    env.storage()
+        .persistent()
+        .set(&DataKey::LastDisputeClosedAt(dispute.job_id), &env.ledger().timestamp());
+    bump_last_dispute_closed_ttl(env, dispute.job_id);
 
     env.storage()
         .persistent()

@@ -14,6 +14,7 @@ import { asyncHandler } from "../middleware/error";
 import { avatarUpload } from "../config/upload";
 import { validate } from "../middleware/validation";
 import { ReputationService } from "../services/reputation.service";
+import { logger } from "../lib/logger";
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -46,7 +47,7 @@ router.get("/me", authenticate, async (req: AuthRequest, res: Response) => {
 
     res.json(user);
   } catch (error) {
-    console.error("Get current user error:", error);
+    logger.error({ err: error }, "Get current user error");
     res.status(500).json({ error: "Internal server error." });
   }
 });
@@ -119,7 +120,7 @@ router.put(
 
       res.json(updatedUser);
     } catch (error) {
-      console.error("Update profile error:", error);
+      logger.error({ err: error }, "Update profile error");
       res.status(500).json({ error: "Internal server error." });
     }
 });
@@ -146,7 +147,7 @@ router.post(
       });
       res.json(updated);
     } catch (error) {
-      console.error("Avatar upload error:", error);
+      logger.error({ err: error }, "Avatar upload error");
       res.status(500).json({ error: "Internal server error." });
     }
   },
@@ -444,7 +445,7 @@ router.patch("/me/onboarding", authenticate, async (req: AuthRequest, res: Respo
     });
     res.json(user);
   } catch (error) {
-    console.error("Complete onboarding error:", error);
+    logger.error({ err: error }, "Complete onboarding error");
     res.status(500).json({ error: "Internal server error." });
   }
 });
